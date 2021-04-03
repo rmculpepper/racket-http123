@@ -175,3 +175,6 @@
   (define s (and v (bytes->string/latin-1 v)))
   (define n (and s (string->number s)))
   (and (exact-nonnegative-integer? n) n))
+
+(define (bytes-join bss sep)
+  (apply bytes-append (add-between bss sep)))

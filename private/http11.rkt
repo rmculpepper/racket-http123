@@ -2,7 +2,6 @@
 (require racket/class
          racket/match
          racket/list
-         racket/string
          racket/port
          racket/tcp
          net/url-structs
@@ -13,6 +12,7 @@
          "header.rkt"
          "regexp.rkt"
          "io.rkt"
+         "request.rkt"
          file/gunzip)
 (provide (all-defined-out))
 
@@ -73,7 +73,7 @@
 (define CHUNKED-EOL-MODE 'return-linefeed)
 (define CONTENT-LENGTH-READ-NOW (expt 2 20)) ;; FIXME
 
-(define SUPPORTED-CONTENT-ENCODINGS '("gzip" "deflate"))
+(define SUPPORTED-CONTENT-ENCODINGS '(#"gzip" #"deflate"))
 
 (define-rx STATUS-CODE #px#"[0-9]{3}")
 (define-rx STATUS-LINE
@@ -94,68 +94,129 @@
 
     (define/public (abandon)
       ;; Only abandon output port.
-      (when out (abandon-port out)))
+      (when out (abandon-port out) (set! out #f)))
 
-    (define/private (abandon-port p)
-      (cond [(tcp-port? p) (tcp-abandon-port p)]
-            [(ssl-port? p) (ssl-abandon-port p)]
-            [else (internal-error "cannot abandon port: ~e" p)]))
+    ;; queue represents a queue of requests (and their connection controls) that
+    ;; have been sent but whose responses have not been received.
 
-    ;; Connection States:
-    ;; - SEND-RECV  -- ie, open; can send new requests and receive responses
-    ;; - RECV-ONLY  -- ie, 
-    ;; - !send, !recv
+    (define queue-sema (make-semaphore 1))
+    (define queue null) ;; (Listof (cons Request ConnectionControl))
+
+    (define/private (enqueue rqe)
+      (call-with-semaphore queue-sema
+        (lambda () (set! queue (append queue (list rqe))))))
+
+    (define/private (dequeue)
+      (call-with-semaphore queue-sema
+        (lambda ()
+          (and (pair? queue) (begin0 (car queue) (set! queue (cdr queue)))))))
+
+    ;; High-level SENDING connection states:
+    ;; - send-any             -- basic connected state
+    ;; - send-replayable      -- because (sent, unreceived) queue is non-empty
+    ;; - cannot-send          -- because of sent Close or Upgrade
+    (define/public (get-send-state)
+      (call-with-semaphore queue-sema (lambda () (-get-send-state))))
+
+    (define/private (-get-send-state)
+      (cond [(let ([out out]) (or (not out) (port-closed? out))) 'cannot-send]
+            [(null? queue) 'send-any]
+            [(for/or ([e (in-list queue)]) (control:may-end? (cdr e))) 'cannot-send]
+            [else 'send-replayable]))
+
+    ;; Misc bits of useful state information:
+    ;; - http-spoken?         -- are we sure the server speaks HTTP (because of a response)?
+    ;; - last-send            -- time of last send we performed (related to timeout)
+    #;(define http-spoken? #f)
+    #;(define last-send -inf.0)
+
+    ;; ----------------------------------------
+    ;; Output Support
+
+    (define out-sema (make-semaphore 1))
+    (define/private (release-output-mutex) (semaphore-post out-sema))
+    (define/private (output-mutex-held?) (semaphore-held? out-sema))
+
+    ;; Note: This *does not* release the mutex when the procedure returns,
+    ;; unless there is an error (and then it closes the connection).
+    (define/private (call/acquire-output-mutex proc)
+      (call/acquire-semaphore out-sema proc (lambda () (abandon))))
+
+    ;; ----------------------------------------
+    ;; Input Support
+
+    (define br
+      (make-binary-reader in
+        #:error-handler
+        (make-binary-reader-error-handler
+         #:error (lambda (br who fmt . args) (comm-error fmt . args))
+         #:show-data? (lambda (br who) #f))))
+
+    (define in-sema (make-semaphore 1))
+    (define/private (release-input-mutex) (semaphore-post in-sema))
+    (define/private (input-mutex-held?) (semaphore-held? in-sema))
+
+    ;; Note: This *does not* release the mutex when the procedure returns,
+    ;; unless there is an error (and then it closes the connection).
+    (define/private (call/acquire-input-mutex proc)
+      (call/acquire-semaphore in-sema proc (lambda () (close))))
+
+    (define/private (comm-error fmt . args)
+      (apply error* fmt args))
 
     ;; ----------------------------------------
     ;; Request and Response
 
-    (define/public (sendrecv #:method method
-                             #:url u
-                             #:headers [headers null]
-                             #:data [data #f]
-                             #:close? [close? #f])
-      (send-request #:method method
-                    #:url u
-                    #:headers headers
-                    #:data data
-                    #:close? close?)
-      (read-response #:method method
-                     #:close? close?))
+    (define/public (sendrecv req ccontrol)
+      ;; PRE: queue is empty! (FIXME)
+      (queue-request req ccontrol)
+      (read-next-response))
 
     ;; ----------------------------------------
     ;; Request (Output)
 
-    (define/public (send-request #:method method            ; Symbol, eg 'GET
-                                 #:url u                    ; URL
-                                 #:headers [headers null]   ; (Listof Bytes)
-                                 #:data [data #f]           ; (U Bytes (Bytes -> Void) #f)
-                                 #:close? [close? #f])      ; Boolean
-      ;; FIXME: check not closed/abandoned?
+    ;; queue-request : Request ConnectionControl -> Boolean
+    ;; Returns #t if request sent and queued, #f if cannot send in current state.
+    (define/public (queue-request req ccontrol)
+      (check-req-headers (request-headers req))
+      (call/acquire-output-mutex
+       (lambda ()
+         (define can-proceed?
+           (case (-get-send-state)
+             [(send-any) #t]
+             [(send-replayable) (request:can-replay? req)]
+             [(cannot-send) #f]))
+         (cond [can-proceed?
+                (define rqe (make-rqentry req ccontrol))
+                (-send-request req ccontrol)
+                (enqueue rqe)
+                (release-output-mutex)
+                #t]
+               [else
+                (release-output-mutex)
+                #f]))))
+
+    (define/private (-send-request req ccontrol)
+      (match-define (request method u headers data) req)
       (fprintf out "~a ~a HTTP/1.1\r\n" method (url->bytes u))
-      (define more-headers
-        (list (and (headerset-missing? headers #rx"^(?i:Host:) +.+$")
-                   ;; RFC 7230 Section 5.4 (Host): The Host header is required,
-                   ;; and it must be the same as the authority component of the
-                   ;; target URI (minus userinfo).
-                   ;; FIXME
-                   (format "Host: ~a" (url->host-bytes u)))
-              (and (headerset-missing? headers #rx"^(?i:Accept-Encoding:) +.+$")
-                   (format "Accept-Encoding: ~a"
-                           (string-join SUPPORTED-CONTENT-ENCODINGS ",")))
-              (and (headerset-missing? headers #rx"^(?i:User-Agent:) +.+$")
-                   default-user-agent-header)
-              (cond [(procedure? data)
-                     (format "Transfer-Encoding: chunked")]
-                    [(and (bytes? data)
-                          (headerset-missing? headers #rx"^(?i:Content-Length:) +.+$"))
-                     (format "Content-Length: ~a" (bytes-length data))]
-                    [else
-                     ;; If no content data, don't add Content-Length header.
-                     #f])
-              (and (and close? (headerset-missing? headers #rx"^(?i:Connection:) +.+$"))
-                   (format "Connection: close\r\n"))))
-      (for ([h (in-list more-headers)] #:when h)
-        (fprintf out "~a\r\n" h))
+      (begin
+        ;; RFC 7230 Section 5.4 (Host): The Host header is required,
+        ;; and it must be the same as the authority component of the
+        ;; target URI (minus userinfo).
+        (fprintf out "Host: ~a\r\n" (url->host-bytes u))
+        (fprintf out "Accept-Encoding: ~a\r\n"
+                 (bytes-join SUPPORTED-CONTENT-ENCODINGS #","))
+        (when (headerset-missing? headers #rx"^(?i:User-Agent:)")
+          (fprintf out "~a\r\n" default-user-agent-header))
+        (cond [(procedure? data)
+               (fprintf out "Transfer-Encoding: chunked\r\n")]
+              [(bytes? data)
+               (format "Content-Length: ~a\r\n" (bytes-length data))]
+              [else
+               ;; If no content data, don't add Content-Length header.
+               ;; FIXME!!!
+               (void)])
+        (send-connection-control ccontrol))
       (for ([h (in-list headers)])
         (fprintf out "~a\r\n" h))
       (fprintf out "\r\n")
@@ -172,49 +233,62 @@
             [(bytes? data)
              (write-bytes data out)]
             [else (void)])
-      (flush-output out))
+      (flush-output out)
+      (when (eq? ccontrol 'close) (abandon)))
+
+    (define/private (check-req-headers headers)
+      (define reserved-header-rxs
+        '(#rx"^(?i:Host:)"
+          #rx"^(?i:Accept-Encoding:)"
+          #rx"^(?i:Content-Length:)"
+          #rx"^(?i:Transfer-Encoding:)"
+          #rx"^(?i:Connection:)"))
+      (for ([header (in-list headers)])
+        (for ([rx (in-list reserved-header-rxs)])
+          (when (regexp-match? rx header)
+            (error* "request contains header reserved for user-agent implementation\n  header: ~e"
+                    header)))))
 
     (define/private (url->host-bytes u)
       (send parent url->host-bytes u))
 
+    (define/private (send-connection-control ccontrol)
+      (match ccontrol
+        ['close
+         (fprintf out "Connection: close\r\n")]
+        [(or 'keep-alive #f)
+         (void)]
+        [(connection:upgrade protocols)
+         (fprintf out "Connection: upgrade\r\n")
+         (fprintf out "Upgrade: ~a\r\n"
+                  (bytes-join protocols #", "))]))
+
     ;; ----------------------------------------
     ;; Response (Input)
 
-    (define in-sema (make-semaphore 1))
-    (define br
-      (make-binary-reader in
-        #:error-handler
-        (make-binary-reader-error-handler
-         #:error (lambda (br who fmt . args) (comm-error fmt . args))
-         #:show-data? (lambda (br who) #f))))
-
-    (define/private (acquire-input-mutex) (semaphore-wait in-sema))
-    (define/private (release-input-mutex) (semaphore-post in-sema))
-    (define/private (input-mutex-held?)
-      (not (sync/timeout 0 (semaphore-peek-evt in-sema))))
-
-    ;; Note: This *does not* release the input mutex when the procedure returns,
-    ;; unless there is an error (and then it closes the connection).
-    (define/private (call/acquire-input-mutex proc)
-      (acquire-input-mutex)
-      (with-handlers ([(lambda (e) #t)
-                       (lambda (e)
-                         (when (input-mutex-held?)
-                           (close)
-                           (release-input-mutex))
-                         (raise e))])
-        (call-with-continuation-barrier proc)))
-
-    (define/private (comm-error fmt . args)
-      (close)
-      (release-input-mutex)
-      (apply error* fmt args))
-
-    (define/public (read-response #:method method
-                                  #:close? [iclose? #f])
+    ;; PRE: `in` has input ready (as evt), even if eof
+    (define/public (read-next-response)
       (call/acquire-input-mutex
        (lambda ()
-         (define-values (status-line http-version status-code) (read-status-line))
+         (cond [(let ([in in])
+                  (or (not in)
+                      (port-closed? in)
+                      (eof-object? (peek-byte in))))
+                #f]
+               [(dequeue)
+                ;; Note: must dequeue within input-mutex so that two readers
+                ;; don't read in wrong order.
+                => (match-lambda
+                     [(rqentry req ccontrol)
+                      (read-response req ccontrol)])]
+               [else
+                #f]))))
+
+    (define/private (read-response req ccontrol)
+      (define method (request-method req))
+      (call/acquire-input-mutex
+       (lambda ()
+         (define-values (status-line status-version status-code) (read-status-line))
          (define raw-headers (read-raw-headers))
          (define headers (new headers% (raw-headers raw-headers)))
          (define no-content? ;; RFC 7230 Section 3.3.3, cases 1 and 2
@@ -225,11 +299,19 @@
                (and (eq? method 'CONNECT)
                     (regexp-match? #rx"^2.." status-code))))
          (check-headers method no-content? headers)
-         (define close? (or iclose? (send headers has-value? 'connection #"close")))
+         (define close?
+           (or (eq? ccontrol 'close)
+               (send headers has-value? 'connection #"close")))
          (when close? (abandon))
          (define decoded-content (if no-content? #f (get-decoded-content-input headers)))
          (when close? (close))
-         (values status-line http-version status-code headers decoded-content))))
+         (new http11-response%
+              (req req) (ccontrol ccontrol)
+              (status-line status-line)
+              (status-version status-version)
+              (status-code status-code)
+              (headers headers)
+              (content decoded-content)))))
 
     (define/public (read-status-line)
       (define line (b-read-bytes-line br STATUS-EOL-MODE))
@@ -338,6 +420,31 @@
 
 ;; ------------------------------------------------------------
 
+(define http11-response%
+  (class* object% ()
+    (init-field req ccontrol
+                status-version  ;; Bytes
+                status-code     ;; Nat
+                status-line     ;; Bytes
+                headers         ;; headers%
+                content)        ;; Bytes or InputPort
+    (super-new)
+
+    (define/public (get-req) req)
+    (define/public (get-ccontrol) ccontrol)
+    (define/public (get-status-version) status-version)
+    (define/public (get-status-code) status-code)
+    (define/public (get-status-line) status-line)
+    (define/public (get-headers) headers)
+    (define/public (get-content) content)
+
+    ))
+
+;; ------------------------------------------------------------
+
+;; FIXME: distinguish between error in decoding vs error in reading connection
+;; stream; can recover from the first one.
+
 ;; make-decoding-input-port : Src (Src OutputPort -> Void) -> AsyncExnInputPort
 (define (make-decoding-input-port src decode-through-ports)
   (define-values (in out) (make-pipe PIPE-SIZE))
@@ -362,8 +469,29 @@
   (cond [(eof-object? (peek-byte in)) #""]
         [else (make-decoding-input-port in inflate)]))
 
+;; abandon-port : Port -> Void
+(define (abandon-port p)
+  (cond [(tcp-port? p) (tcp-abandon-port p)]
+        [(ssl-port? p) (ssl-abandon-port p)]
+        [else (internal-error "cannot abandon port: ~e" p)]))
+
 ;; ------------------------------------------------------------
 
 (define (url->bytes u)
   ;; FIXME: UTF-8 ???
   (string->bytes/utf-8 (url->string u)))
+
+;; ------------------------------------------------------------
+
+(define (semaphore-held? sema)
+  (not (sync/timeout 0 (semaphore-peek-evt sema))))
+
+(define (call/acquire-semaphore sema proc handle-error)
+  (semaphore-wait sema)
+  (with-handlers ([(lambda (e) #t)
+                   (lambda (e)
+                     (when (semaphore-held? sema)
+                       (handle-error)
+                       (semaphore-post sema))
+                     (raise e))])
+    (call-with-continuation-barrier proc)))
