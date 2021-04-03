@@ -33,7 +33,7 @@
     (define conn #f)
 
     (define/public (get-actual-connection)
-      (cond [conn
+      (cond [(and conn (send conn live?))
              conn]
             [else
              (define c (open-actual-connection))
@@ -60,6 +60,22 @@
       (string->bytes/utf-8
        (cond [(= port (case scheme [("http") 80] [("https") 443] [else #f])) host]
              [else (format "~a:~a" host port)])))
+
+    (define/public (sync-request req ccontrol)
+      (define TRIES 2)
+      (let loop ([tries TRIES])
+        (when (zero? tries)
+          (error* "failed to send request (too many attempts)"))
+        (define ac (get-actual-connection))
+        (cond [(send ac queue-request req ccontrol)
+               (send ac read-next-response)]
+              [else
+               (send ac abandon)
+               (loop (sub1 tries))])))
+
+    #;
+    (define/public (async-request req ccontrol handle)
+      ...)
 
     ))
 

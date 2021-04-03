@@ -3,6 +3,25 @@
          openssl)
 (provide (all-defined-out))
 
+;; ----------------------------------------
+
+(struct box-evt (b sema evt)
+  #:property prop:evt (struct-field-index evt))
+
+(define (make-box-evt [call? #f])
+  (define b (box #f))
+  (define sema (make-semaphore 0))
+  (define evt
+    (wrap-evt (semaphore-peek-evt sema)
+              (lambda (_e) (if call? ((unbox b)) (unbox b)))))
+  (box-evt b sema evt))
+
+(define (box-evt-set! be v)
+  (set-box! (box-evt-b be) v)
+  (void (semaphore-post (box-evt-sema be))))
+
+;; ----------------------------------------
+
 (struct async-exn-input-port (in exn-box sema)
   #:property prop:input-port (struct-field-index in))
 
