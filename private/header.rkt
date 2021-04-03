@@ -23,10 +23,10 @@
                     [(list _ key-bs value-bs)
                      (define key (normalize-key key-bs))
                      (cond [(hash-ref headers key #f)
-                            => (lambda (old-value)
-                                 (define new-value
-                                   (cons value-bs (if (bytes old-value) (list old-value) old-value)))
-                                 (hash-set! headers key new-value)
+                            => (lambda (old-v)
+                                 (define old-v* (if (bytes? old-v) (list old-v) old-v))
+                                 (define new-v (cons value-bs old-v*))
+                                 (hash-set! headers key new-v)
                                  (hash-set! list-valued key #t))]
                            [else
                             (hash-set! headers key value-bs)])])]
@@ -42,6 +42,8 @@
           [else
            ;; Otherwise, pre-split components on commas.
            (hash-set! headers k (apply append (map split-on-commas vs)))])))
+
+    ;; FIXME: instead of pre-splitting, maybe make a list of known List-Valued headers?
 
     (define/public (get-raw-headers) raw-headers)
     (define/public (get-headers) headers)

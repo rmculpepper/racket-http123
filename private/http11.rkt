@@ -73,6 +73,8 @@
 (define CHUNKED-EOL-MODE 'return-linefeed)
 (define CONTENT-LENGTH-READ-NOW (expt 2 20)) ;; FIXME
 
+(define SUPPORTED-CONTENT-ENCODINGS '("gzip" "deflate"))
+
 (define-rx STATUS-CODE #px#"[0-9]{3}")
 (define-rx STATUS-LINE
   (rx ^ (record "HTTP/[0-9.]+") " " (record STATUS-CODE) " " (record ".*") $))
@@ -99,6 +101,11 @@
             [(ssl-port? p) (ssl-abandon-port p)]
             [else (internal-error "cannot abandon port: ~e" p)]))
 
+    ;; Connection States:
+    ;; - SEND-RECV  -- ie, open; can send new requests and receive responses
+    ;; - RECV-ONLY  -- ie, 
+    ;; - !send, !recv
+
     ;; ----------------------------------------
     ;; Request and Response
 
@@ -106,17 +113,14 @@
                              #:url u
                              #:headers [headers null]
                              #:data [data #f]
-                             #:close? [close? #f]
-                             #:decodes [decodes '(gzip deflate)])
+                             #:close? [close? #f])
       (send-request #:method method
                     #:url u
                     #:headers headers
                     #:data data
-                    #:close? close?
-                    #:decodes decodes)
+                    #:close? close?)
       (read-response #:method method
-                     #:close? close?
-                     #:decodes decodes))
+                     #:close? close?))
 
     ;; ----------------------------------------
     ;; Request (Output)
@@ -125,23 +129,19 @@
                                  #:url u                    ; URL
                                  #:headers [headers null]   ; (Listof Bytes)
                                  #:data [data #f]           ; (U Bytes (Bytes -> Void) #f)
-                                 #:close? [close? #f]       ; Boolean
-                                 #:decodes [decodes '(gzip deflate)]) ; (Listof Symbol)
+                                 #:close? [close? #f])      ; Boolean
       ;; FIXME: check not closed/abandoned?
-      (define url-bs (url->bytes u))
-      (define host-bs (send parent url->host-bytes u))
-      (fprintf out "~a ~a HTTP/1.1\r\n" method url-bs)
+      (fprintf out "~a ~a HTTP/1.1\r\n" method (url->bytes u))
       (define more-headers
         (list (and (headerset-missing? headers #rx"^(?i:Host:) +.+$")
                    ;; RFC 7230 Section 5.4 (Host): The Host header is required,
                    ;; and it must be the same as the authority component of the
                    ;; target URI (minus userinfo).
                    ;; FIXME
-                   (format "Host: ~a" host-bs))
-              (and (pair? decodes)
-                   (headerset-missing? headers #rx"^(?i:Accept-Encoding:) +.+$")
+                   (format "Host: ~a" (url->host-bytes u)))
+              (and (headerset-missing? headers #rx"^(?i:Accept-Encoding:) +.+$")
                    (format "Accept-Encoding: ~a"
-                           (string-join (map symbol->string decodes) ",")))
+                           (string-join SUPPORTED-CONTENT-ENCODINGS ",")))
               (and (headerset-missing? headers #rx"^(?i:User-Agent:) +.+$")
                    default-user-agent-header)
               (cond [(procedure? data)
@@ -173,6 +173,9 @@
              (write-bytes data out)]
             [else (void)])
       (flush-output out))
+
+    (define/private (url->host-bytes u)
+      (send parent url->host-bytes u))
 
     ;; ----------------------------------------
     ;; Response (Input)
@@ -208,8 +211,7 @@
       (apply error* fmt args))
 
     (define/public (read-response #:method method
-                                  #:close? [iclose? #f]
-                                  #:decodes [decodes '(gzip deflate)])
+                                  #:close? [iclose? #f])
       (call/acquire-input-mutex
        (lambda ()
          (define-values (status-line http-version status-code) (read-status-line))
@@ -222,14 +224,10 @@
                (regexp-match? #rx"^304" status-code) ;; Not Modified
                (and (eq? method 'CONNECT)
                     (regexp-match? #rx"^2.." status-code))))
-         (check-headers method decodes no-content? headers)
+         (check-headers method no-content? headers)
          (define close? (or iclose? (send headers has-value? 'connection #"close")))
          (when close? (abandon))
-         (define decoded-content
-           (cond [(not no-content?)
-                  (define raw-content (make-raw-content-input no-content? headers))
-                  (make-decoded-content-input headers raw-content)]
-                 [else #f]))
+         (define decoded-content (if no-content? #f (get-decoded-content-input headers)))
          (when close? (close))
          (values status-line http-version status-code headers decoded-content))))
 
@@ -245,7 +243,7 @@
       (cond [(equal? next #"") null]
             [else (cons next (read-raw-headers))]))
 
-    (define/private (check-headers method decodes no-content? headers)
+    (define/private (check-headers method no-content? headers)
       (when (send headers has-key? 'content-length)
         (send headers check-value 'content-length bytes->nat "nonnegative integer"))
       (when (send headers has-key? 'transfer-encoding)
@@ -254,28 +252,29 @@
               (format "~s" #"chunked")))
       (when (send headers has-key? 'content-encoding)
         (send headers check-value 'content-encoding
-              (lambda (b) (memq (bytes->symbol b) decodes))
-              (format "member of ~s" decodes)))
+              (lambda (b) (member (string-downcase (bytes->string/latin-1 b))
+                                  SUPPORTED-CONTENT-ENCODINGS))
+              (format "member of ~a" SUPPORTED-CONTENT-ENCODINGS)))
       ;; FIXME: others?
       (void))
 
-    (define/private (make-raw-content-input no-content? headers) ;; -> Bytes or InputPort
+    (define/public (get-decoded-content-input headers)
+      (define raw-content (make-raw-content-input headers))
+      (make-decoded-content-input headers raw-content))
+
+    (define/private (make-raw-content-input headers) ;; -> Bytes or InputPort
       (define (done) (release-input-mutex))
       ;; Reference: https://tools.ietf.org/html/rfc7230, Section 3.3.3 (Message Body Length)
-      (cond
-        [no-content? #""] ;; Cases 1, 2
-        [(send headers has-value? 'transfer-encoding #"chunked") ;; Case 3
-         ;; FIXME: Transfer-Encoding is more complicated...
-         (make-chunked-input-port done)]
-        [(send headers get-nat-value 'content-length) ;; Case 5 (FIXME: detect errors, Case 4)
-         => (lambda (len) (make-length-limited-input len done))]
-        [else ;; Case 7
-         (log-http-debug "response without Transfer-Encoding or Content-Length")
-         (abandon)
-         (make-read-until-eof-input-port done)]))
+      (cond [(send headers has-value? 'transfer-encoding #"chunked") ;; Case 3
+             (make-chunked-input-port done)]
+            [(send headers get-nat-value 'content-length) ;; Case 5
+             => (lambda (len) (make-length-limited-input len done))]
+            [else ;; Case 7
+             (log-http-debug "response without Transfer-Encoding or Content-Length")
+             (abandon)
+             (make-read-until-eof-input-port done)]))
 
     (define/private (make-decoded-content-input headers raw-content) ;; Bytes or InputPort
-      ;; FIXME: shouldn't checking Content-Encoding against decodes be done earlier?
       (define (get-raw-content-in) ;; -> InputPort
         (if (bytes? raw-content) (open-input-bytes raw-content) raw-content))
       (cond [(and (send headers has-value? 'content-encoding #"gzip"))
@@ -335,29 +334,33 @@
                        [else (done)])))
              (make-decoding-input-port in copy/length-through-ports)]))
 
-    (define/private (make-gunzip-input in)
-      (cond [(eof-object? (peek-byte in)) #""]
-            [else (make-decoding-input-port in gunzip-through-ports)]))
-
-    (define/private (make-inflate-input in)
-      (cond [(eof-object? (peek-byte in)) #""]
-            [else (make-decoding-input-port in inflate)]))
-
-    (define/private (make-decoding-input-port src decode-through-ports)
-      (define-values (in out) (make-pipe PIPE-SIZE))
-      (define wrapped-in (make-async-exn-input-port in))
-      (define decode-t
-        (thread
-         (lambda ()
-           (with-handlers ([exn:fail?
-                            (lambda (e)
-                              (async-exn-input-port-raise wrapped-in e))])
-             (decode-through-ports src out)
-             (close-output-port out)))))
-      wrapped-in)
-
     ))
 
+;; ------------------------------------------------------------
+
+;; make-decoding-input-port : Src (Src OutputPort -> Void) -> AsyncExnInputPort
+(define (make-decoding-input-port src decode-through-ports)
+  (define-values (in out) (make-pipe PIPE-SIZE))
+  (define wrapped-in (make-async-exn-input-port in))
+  (define decode-t
+    (thread
+     (lambda ()
+       (with-handlers ([exn:fail?
+                        (lambda (e)
+                          (async-exn-input-port-raise wrapped-in e))])
+         (decode-through-ports src out)
+         (close-output-port out)))))
+  wrapped-in)
+
+;; make-gunzip-input : InputPort -> (U Bytes InputPort)
+(define (make-gunzip-input in)
+  (cond [(eof-object? (peek-byte in)) #""]
+        [else (make-decoding-input-port in gunzip-through-ports)]))
+
+;; make-inflate-input : InputPort -> (U Bytes InputPort)
+(define (make-inflate-input in)
+  (cond [(eof-object? (peek-byte in)) #""]
+        [else (make-decoding-input-port in inflate)]))
 
 ;; ------------------------------------------------------------
 
