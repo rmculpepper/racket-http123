@@ -89,13 +89,23 @@
 ;; ============================================================
 ;; Exceptions
 
-;; where code : Symbol or #f
-;;       info : (Listof (cons Symbol Any))
-(struct exn:fail:http123 exn:fail (code info))
+;; exn:fail:http123 indicates an error that occurred
+;; where party : #f or 'server or 'client
+;;       code  : Symbol or #f
+;;       info  : (Listof (cons Symbol Any))
+(struct exn:fail:http123 exn:fail (party code info))
+(struct exn:fail:http123:client exn:fail:http123 ())
+(struct exn:fail:http123:server exn:fail:http123 ())
 
-(define (http-error who fmt #:code [code #f] #:info [info null] . args)
+(define (http-error #:who [who #f] #:party [party #f] #:code [code #f] #:info [info null]
+                    fmt . args)
   (let/ec k
     (raise (exn:fail:http123
             (format "~a: ~a" (or who (http123-who)) (apply format fmt args))
             (continuation-marks k)
-            code info))))
+            party code info))))
+
+(define (c-error #:who [who #f] #:code [code #f] #:info [info null] fmt . args)
+  (apply http-error #:who who #:party 'client #:info info fmt args))
+(define (s-error #:who [who #f] #:code [code #f] #:info [info null] fmt . args)
+  (apply http-error #:who who #:party 'server #:info info fmt args))

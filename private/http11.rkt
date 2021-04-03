@@ -149,7 +149,8 @@
       (make-binary-reader in
         #:error-handler
         (make-binary-reader-error-handler
-         #:error (lambda (br who fmt . args) (comm-error fmt . args))
+         #:error (lambda (br who fmt . args)
+                   (apply s-error fmt args #:code 'read))
          #:show-data? (lambda (br who) #f))))
 
     (define in-sema (make-semaphore 1))
@@ -160,9 +161,6 @@
     ;; unless there is an error (and then it closes the connection).
     (define/private (call/acquire-input-mutex proc)
       (call/acquire-semaphore in-sema proc (lambda () (close))))
-
-    (define/private (comm-error fmt . args)
-      (apply error* fmt args))
 
     ;; ----------------------------------------
     ;; Request and Response
@@ -246,8 +244,8 @@
       (for ([header (in-list headers)])
         (for ([rx (in-list reserved-header-rxs)])
           (when (regexp-match? rx header)
-            (error* "request contains header reserved for user-agent implementation\n  header: ~e"
-                    header)))))
+            (c-error "request contains header reserved for user-agent\n  header: ~e" header
+                     #:code 'reserved-request-header)))))
 
     (define/private (url->host-bytes u)
       (send parent url->host-bytes u))
@@ -286,39 +284,38 @@
 
     (define/private (read-response req ccontrol)
       (define method (request-method req))
-      (call/acquire-input-mutex
-       (lambda ()
-         (define-values (status-line status-version status-code) (read-status-line))
-         (define raw-headers (read-raw-headers))
-         (define headers (new headers% (raw-headers raw-headers)))
-         (define no-content? ;; RFC 7230 Section 3.3.3, cases 1 and 2
-           (or (eq? method 'HEAD)
-               (regexp-match? #rx"^1.." status-code) ;; Informational
-               (regexp-match? #rx"^204" status-code) ;; No Content
-               (regexp-match? #rx"^304" status-code) ;; Not Modified
-               (and (eq? method 'CONNECT)
-                    (regexp-match? #rx"^2.." status-code))))
-         (check-headers method no-content? headers)
-         (define close?
-           (or (eq? ccontrol 'close)
-               (send headers has-value? 'connection #"close")))
-         (when close? (abandon))
-         (define decoded-content (if no-content? #f (get-decoded-content-input headers)))
-         (when close? (close))
-         (new http11-response%
-              (req req) (ccontrol ccontrol)
-              (status-line status-line)
-              (status-version status-version)
-              (status-code status-code)
-              (headers headers)
-              (content decoded-content)))))
+      (define-values (status-line status-version status-code) (read-status-line))
+      (define raw-headers (read-raw-headers))
+      (define headers (new headers% (raw-headers raw-headers)))
+      (define no-content? ;; RFC 7230 Section 3.3.3, cases 1 and 2
+        (or (eq? method 'HEAD)
+            (regexp-match? #rx"^1.." status-code) ;; Informational
+            (regexp-match? #rx"^204" status-code) ;; No Content
+            (regexp-match? #rx"^304" status-code) ;; Not Modified
+            (and (eq? method 'CONNECT)
+                 (regexp-match? #rx"^2.." status-code))))
+      (check-headers method no-content? headers)
+      (define close?
+        (or (eq? ccontrol 'close)
+            (send headers has-value? 'connection #"close")))
+      (when close? (abandon))
+      (define decoded-content (if no-content? #f (get-decoded-content-input headers)))
+      (when close? (close))
+      (new http11-response%
+           (req req) (ccontrol ccontrol)
+           (status-line status-line)
+           (status-version status-version)
+           (status-code status-code)
+           (headers headers)
+           (content decoded-content)))
 
     (define/public (read-status-line)
       (define line (b-read-bytes-line br STATUS-EOL-MODE))
       (match (regexp-match (rx STATUS-LINE) line)
         [(list _ http-version status-code reason-phrase)
          (values line http-version status-code)]
-        [#f (comm-error "expected status line from server\n  got: ~e" line)]))
+        [#f (s-error "expected status line from server\n  got: ~e" line
+                     #:code 'bad-status-line)]))
 
     (define/public (read-raw-headers)
       (define next (b-read-bytes-line br HEADER-EOL-MODE))
@@ -334,8 +331,7 @@
               (format "~s" #"chunked")))
       (when (send headers has-key? 'content-encoding)
         (send headers check-value 'content-encoding
-              (lambda (b) (member (string-downcase (bytes->string/latin-1 b))
-                                  SUPPORTED-CONTENT-ENCODINGS))
+              (lambda (b) (member b SUPPORTED-CONTENT-ENCODINGS))  ;; FIXME: case-insensitive?
               (format "member of ~a" SUPPORTED-CONTENT-ENCODINGS)))
       ;; FIXME: others?
       (void))
@@ -379,11 +375,13 @@
           (define line (b-read-bytes-line br CHUNKED-EOL-MODE))
           (match (regexp-match #rx"^([0-9a-fA-F]+)(?:$|;)" line) ;; ignore chunk-ext
             [(list _ size-bs) (string->number (bytes->string/latin-1 size-bs) 16)]
-            [#f (comm-error "expected valid chunk length from server\n  got: ~e" line)]))
+            [#f (s-error "expected valid chunk size from server\n  got: ~e" line
+                         #:code 'bad-chunk-size)]))
         (define (expect-crlf)
           (let ([crlf (b-read-bytes br 2)])
             (unless (equal? crlf #"\r\n")
-              (comm-error "expected CRLF after chunk\n  received: ~e" crlf))))
+              (s-error "expected CRLF after chunk\n  received: ~e" crlf
+                       #:code 'bad-chunked-transfer))))
         (define (read/discard-trailer)
           (define line (b-read-bytes-line br CHUNKED-EOL-MODE))
           (unless (equal? line #"") (read/discard-trailer)))
@@ -409,7 +407,8 @@
                  (cond [(< got len)
                         (define n (read-bytes! buf in 0 (min PIPE-SIZE (- len got))))
                         (cond [(eof-object? n)
-                               (comm-error "server closed connection (before end of content)")]
+                               (s-error "server closed connection (before end of content)"
+                                        #:code 'short-content)]
                               [else
                                (write-bytes buf out 0 n)
                                (loop (+ got n))])]
@@ -468,12 +467,6 @@
 (define (make-inflate-input in)
   (cond [(eof-object? (peek-byte in)) #""]
         [else (make-decoding-input-port in inflate)]))
-
-;; abandon-port : Port -> Void
-(define (abandon-port p)
-  (cond [(tcp-port? p) (tcp-abandon-port p)]
-        [(ssl-port? p) (ssl-abandon-port p)]
-        [else (internal-error "cannot abandon port: ~e" p)]))
 
 ;; ------------------------------------------------------------
 

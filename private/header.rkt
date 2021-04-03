@@ -30,9 +30,7 @@
                                  (hash-set! list-valued key #t))]
                            [else
                             (hash-set! headers key value-bs)])])]
-              [else
-               (error* "bad header: ~e" raw-header)
-               (void)]))
+              [else (s-error "malformed header\n  header: ~e" raw-header #:code 'bad-header)]))
       (for ([k (in-hash-keys list-valued)])
         (define vs (reverse (hash-ref headers k)))
         (case k
@@ -88,14 +86,16 @@
     (define/public (check-value key predicate [description #f])
       (define v (get-value key #f))
       (unless (predicate v)
-        (error* "bad header value\n  header: ~e\n  expected: ~a\n  got: ~e"
-                key (or description (object-name predicate)) v)))
+        (s-error "bad header value\n  header: ~e\n  expected: ~a\n  got: ~e"
+                 key (or description (object-name predicate)) v
+                 #:code 'bad-header-value)))
 
     (define/public (check-values key predicate [description #f])
       (define vs (get-values key #f))
       (unless (and vs (andmap predicate vs))
-        (error* "bad header values\n  header: ~e\n  expected: ~a\n  got: ~e"
-                key (or description (object-name predicate)) vs)))
+        (s-error "bad header values\n  header: ~e\n  expected: ~a\n  got: ~e"
+                 key (or description (object-name predicate)) vs
+                 #:code 'bad-header-value)))
 
     ))
 
@@ -123,13 +123,6 @@
                      (format "^(?i:~a):[ \t]$" (regexp-quote key)))])]))
   (for/or ([h (in-list hs)]) (and (regexp-match rx h) h)))
 
-#|
-(define (headerset-has-value? hs key value)
-  (unless (bytes? value) (error 'headerset-has-value? "expected bytes: ~e" value))
-  (define h (headerset-select hs key))
-  (and h (equal? (header-value value))))
-|#
-
 ;; Reference: https://tools.ietf.org/html/rfc7230#appendix-B
 
 (define-rx OWS "[ \t]*")
@@ -145,22 +138,6 @@
 
 (define (split-on-commas bs)
   (regexp-split #rx#"[ \t]*,[ \t]*" bs))
-
-#|
-(define (header-key h)
-  (cond [(regexp-match (rx^ HEADER-START) h) => cadr]
-        [else (internal-error "bad header: ~e" h)])) ;; FIXME
-(define (header-value h)
-  (cond [(regexp-match (rx^$ HEADER) h) => caddr]
-        [else (internal-error "bad header: ~e" h)])) ;; FIXME
-
-(define (header-value/nat h)
-  (define (bad v) (error* "header value is not a nonnegative integer: ~e" v))
-  (define v (header-value h))
-  (cond [(string->number (bytes->string/utf-8 v))
-         => (lambda (n) (if (exact-nonnegative-integer? n) n (bad v)))]
-        [else (bad v)]))
-|#
 
 ;; FIXME: add reasonable limits for eg, Content-Length headers
 ;; FIXME: pre-scan headers for reasonable values?

@@ -8,8 +8,8 @@
    ccontrol             ;; ConnectionControl
    ) #:transparent)
 
-(define (make-rqentry req ccontrol [sent? #f])
-  (rqentry (request:copy-for-queue req) ccontrol sent?))
+(define (make-rqentry req ccontrol)
+  (rqentry (request:copy-for-queue req) ccontrol))
 
 ;; A Request is:
 (struct request
