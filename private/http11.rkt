@@ -19,11 +19,6 @@
 ;; References:
 ;; - HTTP/1.1: https://tools.ietf.org/html/rfc7230
 
-(define default-user-agent-header
-  (format "User-Agent: Racket/~a (http123)" (version)))
-
-(define PIPE-SIZE 4096)
-
 (define http11-connection%
   (class* object% (#; http-connection<%>)
     (init-field host
@@ -67,6 +62,11 @@
              [else (format "~a:~a" host port)])))
 
     ))
+
+(define default-user-agent
+  (format "Racket/~a (http123)" (version)))
+
+(define PIPE-SIZE 4096)
 
 (define STATUS-EOL-MODE 'return-linefeed)
 (define HEADER-EOL-MODE 'return-linefeed)
@@ -207,7 +207,7 @@
         (fprintf out "Accept-Encoding: ~a\r\n"
                  (bytes-join SUPPORTED-CONTENT-ENCODINGS #","))
         (when (headerset-missing? headers #rx"^(?i:User-Agent:)")
-          (fprintf out "~a\r\n" default-user-agent-header))
+          (fprintf out "User-Agent: ~a\r\n" default-user-agent))
         (cond [(procedure? data)
                (fprintf out "Transfer-Encoding: chunked\r\n")]
               [(bytes? data)
@@ -238,11 +238,11 @@
 
     (define/private (check-req-headers headers)
       (define reserved-header-rxs
-        '(#rx"^(?i:Host:)"
-          #rx"^(?i:Accept-Encoding:)"
-          #rx"^(?i:Content-Length:)"
-          #rx"^(?i:Transfer-Encoding:)"
-          #rx"^(?i:Connection:)"))
+        '(#rx"^(?i:Host):"
+          #rx"^(?i:Accept-Encoding):" ;; In principle, this belongs to a separate layer...
+          #rx"^(?i:Content-Length):"
+          #rx"^(?i:Connection|Keep-Alive|Upgrade):"
+          #rx"^(?i:Transfer-Encoding|TE|Trailer):"))
       (for ([header (in-list headers)])
         (for ([rx (in-list reserved-header-rxs)])
           (when (regexp-match? rx header)
