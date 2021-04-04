@@ -1,5 +1,9 @@
 #lang racket/base
-(require "bitvector.rkt")
+(require racket/match
+         racket/vector
+         binaryio/reader
+         "regexp.rkt"
+         "bitvector.rkt")
 (provide (all-defined-out))
 
 ;; Reference:
@@ -10,9 +14,14 @@
 
 ;; ----------------------------------------
 
+;; A NormalizedHeader is one of
+;; - (list Bytes Bytes)
+;; - (list Bytes Bytes 'never-add)
+
 ;; A FlexibleHeader is one of
 ;; - Bytes
 ;; - (list FlexibleKey FlexibleValue)
+;; - (list FlexibleKey FlexibleValue 'never-add)
 
 ;; A FlexibleKey is one of
 ;; - Symbol
@@ -22,23 +31,259 @@
 ;; - Bytes          -- normal header or unsplit list-valued header
 ;; - (Listof Bytes) -- list-valued header
 
-#;
-;; decode-headers : ?? State -> (Listof (list Symbol Bytes))
-(define (decode-headers ?? state)
-  __)
+;; encode-headers : OutputPort (Listof FlexibleHeader) State -> Void
+(define (encode-headers out headers dt #:who [who 'encode-headers])
+  (define header-reps (encode-headers* headers dt #:who who))
+  (for ([hrep (in-list header-reps)])
+    (write-header-rep out hrep)))
 
-#;
-;; encode-headers : (Listof FlexibleHeader) State -> ???
-(define (encode-headers headers state)
-  __)
+(define (encode-headers* headers dt #:who [who 'encode-headers*])
+  (for/list ([header (in-list headers)])
+    (encode-header who header dt)))
+
+(define (encode-header who header dt)
+  (match header
+    [(list key value 'never-add)
+     (define key* (normalize-key who key))
+     (header:literal 'never-add key* value)]
+    [(list key value)
+     (define key* (normalize-key who key))
+     (define key-index (or (hash-ref key-table key* #f)
+                           (dtable-find-key dt key* dtable-adjustment)))
+     (cond [(hash-ref key+value-table (list key* value) #f)
+            => (lambda (index) (header:indexed index))]
+           [(dtable-find dt (list key* value) dtable-adjustment)
+            => (lambda (index) (header:indexed index))]
+           [(member key* keys-to-index-headers)
+            (dtable-add! dt (list (or key-index key*) value))
+            (header:literal 'add (or key-index key*) value)]
+           [key-index
+            (header:literal 'no-add key-index value)]
+           [else
+            (header:literal 'no-add key* value)])]))
+
+(define (normalize-key who key0)
+  (let loop ([key key0])
+    (cond [(bytes? key) key]
+          [(symbol? key) (normalize-key (symbol->string key))]
+          [(and (string? key) (regexp-match? (rx^$ TOKEN) key))
+           (string->bytes/latin-1 key)]
+          [else (error who "bad header key\n  key: ~e" key0)])))
+
+(define keys-to-index-headers
+  '(#":authority"
+    #"content-type"
+    #"host"
+    #"user-agent"))
+
+;; decode-headers : BinaryReader DTable -> (Listof NormalizedHeader)
+(define (decode-headers br dt)
+  (let loop ()
+    (cond [(b-at-limit? br) null]
+          [else
+           (define h (read-header-rep br))
+           (match h
+             [(header:indexed index)
+              (cons (table-ref dtable) (loop))]
+             [(header:literal mode key value)
+              (define e
+                (list* (if (bytes? key) key (car (table-ref dtable key)))
+                       value
+                       (case mode [(never-add) '(never-add)] [else '()])))
+              (when (eq? mode 'add) (dtable-add! dtable e))
+              (cons e (loop))]
+             [(header:maxsize new-maxsize)
+              (set-dtable-maxsize! dt new-maxsize)
+              (dtable-check-evict dt)
+              (loop)])])))
 
 ;; ------------------------------------------------------------
+
+;; A DTable is a ring buffer that stores virtual size information.
+(struct dtable
+  (vec          ;; vector storing entries
+   start        ;; index of oldest entry
+   count        ;; number of entries
+   maxsize      ;; maximum size
+   size         ;; current size
+   ) #:mutable)
+
+;; dtable-adjustment : Nat, add to dtable index to get (global) index
+(define dtable-adjustment (add1 static-table-length))
+
+(define DTABLE-INIT-CAPACITY 16)
+
+(define (make-dtable max-size)
+  (make-vector DTABLE-INIT-CAPACITY 0 0 max-size 0))
+
+(define (dtable-copy dt)
+  (match-define (dtable vec start count maxsize size) dt)
+  (dtable (vector-copy vec) start count maxsize size))
+
+(define (dtable-ref dt index)
+  (vector-ref (dtable-vec dt) (dtable:index->vector-index 'dtable-ref dt index)))
+
+(define (dtable:index->vector-index who dt index)
+  (match-define (dtable vec start count _ms _s) dt)
+  (unless (< index count) (error who "index out of range\n  index: ~e" index))
+  (remainder (+ start count -1 (- index))
+             (vector-length vec)))
+
+(define (dtable-find dt entry [adjust 0])
+  (for/or ([index (in-range (dtable-count dt))])
+    (define e (dtable-ref dt index))
+    (and (equal? e entry) (+ index adjust))))
+
+(define (dtable-find-key dt key [adjust 0])
+  (for/or ([index (in-range (dtable-count dt))])
+    (define e (dtable-ref dt index))
+    (and (equal? (car e) key) (+ index adjust))))
+
+(define (dtable-add! dt entry)
+  (match-define (dtable vec start count _ms old-size) dt)
+  (cond [(< count (vector-length vec))
+         (vector-set! vec (remainder (+ start count) (vector-length vec)) entry)
+         (set-dtable-size! dt (+ old-size (entry-size entry)))
+         (dtable-check-evict dt)]
+        [else
+         (define new-vec (make-vector (* 3 (quotient (vector-length vec) 2))))
+         (vector-copy! new-vec 0 vec start (vector-length vec))
+         (vector-copy! new-vec (vector-length vec) vec 0 (max 0 (- (vector-length vec) count)))
+         (set-dtable-vec! dt new-vec)
+         (set-dtable-start! dt 0)
+         (dtable-add! dt entry)]))
+
+(define (dtable-check-evict dt)
+  (match-define (dtable vec start count maxsize size) dt)
+  (unless (<= size maxsize)
+    (let loop ([start start] [count count] [size size])
+      (cond [(<= size maxsize)
+             (set-dtable-start! dt start)
+             (set-dtable-count! dt count)
+             (set-dtable-size!  dt size)]
+            [else
+             (define esize (entry-size (vector-ref vec start)))
+             (vector-set! vec start #f)
+             (loop (modulo (add1 start) (vector-length vec))
+                   (sub1 count)
+                   (- size esize))]))))
+
+(define (entry-size entry)
+  (+ 32
+     (bytes-length (car entry))
+     (and (cadr entry) (bytes-length (cadr entry)))))
+
+;; ------------------------------------------------------------
+;; 5.1 Integer representation
+
+;; read-intrep : BinaryReader Nat[1,8] Byte -> Nat
+(define (read-intrep br prefix b)
+  (let ([b (bitwise-bit-field b 0 (sub1 prefix))])
+    (define all-ones (sub1 (arithmetic-shift 1 prefix)))
+    (cond [(= b all-ones)
+           (+ all-ones (read-intrep-k br))]
+          [else b])))
+(define (read-intrep-k br)
+  (let loop ([acc 0] [power 0])
+    (define b (b-read-byte br))
+    (define acc* (+ acc (arithmetic-shift (bitwise-bit-field b 0 6) power)))
+    (if (bitwise-bit-set? b 7) (loop acc* (+ power 7)) acc*)))
+
+(define (write-intrep out prefix high-b n)
+  (define b (arithmetic-shift high-b prefix))
+  (define all-ones (sub1 (arithmetic-shift 1 prefix)))
+  (cond [(< n all-ones)
+         (write-byte (+ b n) out)]
+        [else
+         (write-byte (+ b all-ones) out)
+         (write-intrep-k out (- n all-ones))]))
+(define (write-intrep-k out n)
+  (cond [(< n #x80)
+         (write-byte n out)]
+        [else
+         (write-byte (+ #x80 (bitwise-bit-field n 0 7)) out)
+         (write-intrep-k out (arithmetic-shift n -7))]))
+
+;; 5.2 String Literal Representation
+
+(define (read-string-literal br)
+  (define b (b-read-byte br))
+  (define huffman? (bitwise-bit-set? b 7))
+  (define len (read-intrep br 7 b))
+  (define bs (b-read-bytes br len))
+  (if huffman? (h-decode bs #t) bs))
+
+(define (write-string-literal out bs)
+  (define enc (h-encode bs))
+  (cond [(< (bytes-length enc) (bytes-length bs))
+         (write-intrep out 7 #b1 (bytes-length enc))
+         (write-bytes enc out)]
+        [else
+         (write-intrep out 7 #b0 (bytes-length enc))
+         (write-bytes bs out)]))
+
+;; 6 Binary Format
+
+(struct header:indexed (index) #:prefab)
+(struct header:literal (mode key value) #:prefab)
+(struct header:maxsize (maxsize) #:prefab)
+
+(define (read-header-rep br)
+  (define b (b-read-byte br))
+  (cond [(bitwise-bit-set? b 7) ;; #b1...
+         ;; 6.1 Indexed Header Field Representation
+         (define index (read-intrep br 7 b))
+         (when (zero? index)
+           (error 'read-header-rep "illegal zero index"))
+         (header:indexed index)]
+        [(bitwise-bit-set? b 6) ;; #b01...
+         ;; 6.2.1 Literal Header Field with Incremental Indexing
+         (define index (read-intrep br 6 b))
+         (define key
+           (cond [(zero? index) (read-string-literal br)]
+                 [else index]))
+         (define value (read-string-literal br))
+         (header:literal 'add key value)]
+        [(= #b000 (bitwise-bit-field b 5 8)) ;; #b000...
+         ;; 6.2.{2,3} Literal Header Field {without Indexing, Never Indexed}
+         (define mode (if (bitwise-bit-set? b 4) 'never-add 'no-add))
+         (define index (read-intrep br 4 b))
+         (define key
+           (cond [(zero? index) (read-string-literal br)]
+                 [else index]))
+         (define value (read-string-literal br))
+         (header:literal mode key value)]
+        [(= #b001 (bitwise-bit-field b 5 8)) ;; #b001...
+         (define new-maxsize (read-intrep br 5 b))
+         (header:maxsize new-maxsize)]))
+
+(define (write-header-rep out h)
+  (match h
+    [(header:indexed index)
+     (write-intrep out 7 #b1 index)]
+    [(header:literal mode key value)
+     (define keyindex (if (bytes? key) 0 key))
+     (case mode
+       [(add) (write-intrep out 6 #b01 keyindex)]
+       [(no-add) (write-intrep out 4 #b0000 keyindex)]
+       [(never-add) (write-intrep out 4 #b0001 keyindex)])
+     (when (bytes? key) (write-string-literal out key))
+     (write-string-literal value)]
+    [(header:maxsize new-maxsize)
+     (write-intrep out 5 #b001 new-maxsize)]))
+
+;; ------------------------------------------------------------
+
+(define (table-ref dtable index)
+  (if (<= index static-table-length)
+      (static-table-ref index)
+      (dtable-ref dtable (- index 1 static-table-length))))
 
 ;; ------------------------------------------------------------
 
 (define static-table
   '#[;;(Index)   HeaderName                       HeaderValue
-     [#;  1       #":authority"                   #f]
+     [#;  1       #":authority"                   #""]
      [#;  2       #":method"                      #"GET"           ]
      [#;  3       #":method"                      #"POST"          ]
      [#;  4       #":path"                        #"/"             ]
@@ -52,53 +297,55 @@
      [#; 12       #":status"                      #"400"           ]
      [#; 13       #":status"                      #"404"           ]
      [#; 14       #":status"                      #"500"           ]
-     [#; 15       #"accept-charset"               #f]
+     [#; 15       #"accept-charset"               #""]
      [#; 16       #"accept-encoding"              #"gzip, deflate" ]
-     [#; 17       #"accept-language"              #f]
-     [#; 18       #"accept-ranges"                #f]
-     [#; 19       #"accept"                       #f]
-     [#; 20       #"access-control-allow-origin"  #f]
-     [#; 21       #"age"                          #f]
-     [#; 22       #"allow"                        #f]
-     [#; 23       #"authorization"                #f]
-     [#; 24       #"cache-control"                #f]
-     [#; 25       #"content-disposition"          #f]
-     [#; 26       #"content-encoding"             #f]
-     [#; 27       #"content-language"             #f]
-     [#; 28       #"content-length"               #f]
-     [#; 29       #"content-location"             #f]
-     [#; 30       #"content-range"                #f]
-     [#; 31       #"content-type"                 #f]
-     [#; 32       #"cookie"                       #f]
-     [#; 33       #"date"                         #f]
-     [#; 34       #"etag"                         #f]
-     [#; 35       #"expect"                       #f]
-     [#; 36       #"expires"                      #f]
-     [#; 37       #"from"                         #f]
-     [#; 38       #"host"                         #f]
-     [#; 39       #"if-match"                     #f]
-     [#; 40       #"if-modified-since"            #f]
-     [#; 41       #"if-none-match"                #f]
-     [#; 42       #"if-range"                     #f]
-     [#; 43       #"if-unmodified-since"          #f]
-     [#; 44       #"last-modified"                #f]
-     [#; 45       #"link"                         #f]
-     [#; 46       #"location"                     #f]
-     [#; 47       #"max-forwards"                 #f]
-     [#; 48       #"proxy-authenticate"           #f]
-     [#; 49       #"proxy-authorization"          #f]
-     [#; 50       #"range"                        #f]
-     [#; 51       #"referer"                      #f]
-     [#; 52       #"refresh"                      #f]
-     [#; 53       #"retry-after"                  #f]
-     [#; 54       #"server"                       #f]
-     [#; 55       #"set-cookie"                   #f]
-     [#; 56       #"strict-transport-security"    #f]
-     [#; 57       #"transfer-encoding"            #f]
-     [#; 58       #"user-agent"                   #f]
-     [#; 59       #"vary"                         #f]
-     [#; 60       #"via"                          #f]
-     [#; 61       #"www-authenticate"             #f]])
+     [#; 17       #"accept-language"              #""]
+     [#; 18       #"accept-ranges"                #""]
+     [#; 19       #"accept"                       #""]
+     [#; 20       #"access-control-allow-origin"  #""]
+     [#; 21       #"age"                          #""]
+     [#; 22       #"allow"                        #""]
+     [#; 23       #"authorization"                #""]
+     [#; 24       #"cache-control"                #""]
+     [#; 25       #"content-disposition"          #""]
+     [#; 26       #"content-encoding"             #""]
+     [#; 27       #"content-language"             #""]
+     [#; 28       #"content-length"               #""]
+     [#; 29       #"content-location"             #""]
+     [#; 30       #"content-range"                #""]
+     [#; 31       #"content-type"                 #""]
+     [#; 32       #"cookie"                       #""]
+     [#; 33       #"date"                         #""]
+     [#; 34       #"etag"                         #""]
+     [#; 35       #"expect"                       #""]
+     [#; 36       #"expires"                      #""]
+     [#; 37       #"from"                         #""]
+     [#; 38       #"host"                         #""]
+     [#; 39       #"if-match"                     #""]
+     [#; 40       #"if-modified-since"            #""]
+     [#; 41       #"if-none-match"                #""]
+     [#; 42       #"if-range"                     #""]
+     [#; 43       #"if-unmodified-since"          #""]
+     [#; 44       #"last-modified"                #""]
+     [#; 45       #"link"                         #""]
+     [#; 46       #"location"                     #""]
+     [#; 47       #"max-forwards"                 #""]
+     [#; 48       #"proxy-authenticate"           #""]
+     [#; 49       #"proxy-authorization"          #""]
+     [#; 50       #"range"                        #""]
+     [#; 51       #"referer"                      #""]
+     [#; 52       #"refresh"                      #""]
+     [#; 53       #"retry-after"                  #""]
+     [#; 54       #"server"                       #""]
+     [#; 55       #"set-cookie"                   #""]
+     [#; 56       #"strict-transport-security"    #""]
+     [#; 57       #"transfer-encoding"            #""]
+     [#; 58       #"user-agent"                   #""]
+     [#; 59       #"vary"                         #""]
+     [#; 60       #"via"                          #""]
+     [#; 61       #"www-authenticate"             #""]])
+
+(define static-table-length (vector-length static-table))
 
 ;; Note: indexed from 1
 (define (static-table-ref n)
@@ -110,9 +357,8 @@
   (for/fold ([kvh (hash)] [kh (hash)])
             ([kv (in-vector static-table)]
              [index (in-naturals 1)])
-    (if (cadr kv)
-        (values (hash-set kvh kv index) kh)
-        (values kvh (hash-set kh (car kv) index)))))
+    (values (hash-set kvh kv index)
+            (if (hash-has-key? kh (car kv)) kh (hash-set kh (car kv) index)))))
 
 (define (key+value->static-index kv)
   (hash-ref key+value-table kv #f))
@@ -384,6 +630,8 @@
      [#; 255  #;  _11111111_11111111_11111011_10           #x3ffffee  26]
      [#; 256  #;  _11111111_11111111_11111111_111111      #x3fffffff  30]])
 
+(define EOS-CODE-SBV (make-be-sbv #x3fffffff 30))
+
 (define h-table
   (for/vector ([e (in-vector h-table-src)])
     (make-be-sbv (car e) (cadr e))))
@@ -407,34 +655,39 @@
              (cons (loop (take-entries codes 0))
                    (loop (take-entries codes 1)))]))))
 
-(define (h-encode-byte b)
-  (vector-ref h-table b))
-
 (define (h-encode bs)
+  (let-values ([(enc _s _e) (h-encode* bs)]) enc))
+(define (h-encode* bs)
   (define bbuf (make-bitbuffer))
   (for ([b (in-bytes bs)])
     (bitbuffer-write-sbv bbuf (h-encode-byte b)))
-  (bitbuffer-get-bytes bbuf))
+  (bitbuffer-get-bytes bbuf #:pad #xFF))
+(define (h-encode-byte b)
+  (vector-ref h-table b))
 
-(define (h-decode bs start-biti end-biti)
+(define (h-decode bs [start-biti 0] [end-biti (* 8 (bytes-length bs))])
+  (let-values ([(dec biti) (h-decode* bs start-biti end-biti)]) dec))
+(define (h-decode* bs [start-biti 0] [end-biti (* 8 (bytes-length bs))])
   (define out (open-output-bytes))
   (define (decode-byte biti)
-    (let loop ([biti biti] [tree h-decode-tree])
+    (let loop ([biti biti] [tree h-decode-tree] [rprefix empty-sbv])
       (cond [(pair? tree)
-             (unless (< biti end-biti)
-               (error 'h-decode "incomplete stream"))
-             (if (bytes-be-bit-set? bs biti)
-                 (loop (add1 biti) (cdr tree))
-                 (loop (add1 biti) (car tree)))]
+             (cond [(< biti end-biti)
+                    (if (bytes-be-bit-set? bs biti)
+                        (loop (add1 biti) (cdr tree) (sbv-cons 1 rprefix))
+                        (loop (add1 biti) (car tree) (sbv-cons 0 rprefix)))]
+                   [(and (< (sbv-length rprefix) 8)
+                         (sbv-prefix? (sbv-reverse rprefix) EOS-CODE-SBV))
+                    (done biti 'partial)]
+                   [else (error 'h-decode "malformed Huffman encoding")])]
             [(byte? tree)
              (write-byte tree out)
              (decode-rest biti)]
-            [(= tree 256) ;; EOS
-             (done biti #t)])))
+            [else (error 'h-decode "malformed Huffman encoding (explicit EOS)")])))
   (define (decode-rest biti)
     (cond [(< biti end-biti)
            (decode-byte biti)]
-          [else (done biti #f)]))
+          [else (done biti 'complete)]))
   (define (done biti eos?)
-    (values (get-output-bytes out) biti eos?))
+    (values (get-output-bytes out) biti))
   (decode-rest start-biti))

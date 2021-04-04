@@ -105,6 +105,10 @@
     #`(quote #,(apply bytes (for/list ([i (in-range 256)]) (revbyte i)))))
   (bytes-ref (quote-table) byte))
 
+(define (sbv-prefix? a b) ;; Is a prefix of b?
+  (and (<= (sbv-length a) (sbv-length b))
+       (= (sbv-bits a) (sbv-bit-field b 0 (sbv-length a)))))
+
 (define (sbv-split sbv n)
   (define len (sbv-length sbv))
   (define n* (min n len))
@@ -151,22 +155,22 @@
   (sbv-shift partial (* blen -8)))
 
 ;; Returns bytes, start bit index, and end bit index.
-(define (bitbuffer-get-bytes bb #:reset? [reset? #f])
+(define (bitbuffer-get-bytes bb #:reset? [reset? #f] #:pad [padwith #x00])
   (match-define (bitbuffer out partial start) bb)
-  (define padlen (bitbuffer-pad bb))
+  (define padlen (bitbuffer-pad bb padwith))
   (define bs (get-output-bytes out reset?))
   (define end (- (* 8 (bytes-length bs)) padlen))
   (unless (or reset? (zero? padlen))
     (file-position out (sub1 (file-position out))))
   (values bs start end))
 
-(define (bitbuffer-pad bb)
+(define (bitbuffer-pad bb [padwith #x00])
   (match-define (bitbuffer out partial start) bb)
   ;;(eprintf "padding partial: ~a\n" (sbv->string partial))
   (define len (sbv-length partial))
   (define padlen (- (* (quotient (+ len 7) 8) 8) len))
   ;;(eprintf "pad: partial=~s=~a, len=~s, padlen=~s\n" partial (sbv->string partial) len padlen)
-  (-write-subbyte bb 0 0 padlen)
+  (-write-subbyte bb padwith 0 padlen)
   (set-bitbuffer-partial! bb empty-sbv)
   padlen)
 

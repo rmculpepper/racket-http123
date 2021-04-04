@@ -125,9 +125,7 @@
 
 ;; Reference: https://tools.ietf.org/html/rfc7230#appendix-B
 
-(define-rx OWS "[ \t]*")
-(define-rx TCHAR "[-^!#$&'*+._`|~a-zA-Z0-9]")
-(define-rx TOKEN (+ TCHAR))
+(provide OWS TCHAR TOKEN)
 
 (define-rx FIELD-VCHAR "[\x21-\x7E]")
 (define-rx FIELD-CONTENT (rx FIELD-VCHAR (? (+ "[ \t]" FIELD-VCHAR))))
