@@ -67,7 +67,7 @@
         (when (zero? tries)
           (error* "failed to send request (too many attempts)"))
         (define ac (get-actual-connection))
-        (cond [(send ac queue-request req ccontrol)
+        (cond [(send ac send-request req ccontrol)
                (send ac read-next-response)]
               [else
                (send ac abandon)
@@ -95,47 +95,50 @@
 (define-rx STATUS-LINE
   (rx ^ (record "HTTP/[0-9.]+") " " (record STATUS-CODE) " " (record ".*") $))
 
-;; represents an actual connection, without reconnect ability
+;; Represents an actual connection, without reconnect ability.
+;; Not thread-safe: expects at most one sending thread, one reading thread.
 (define http11-actual-connection%
   (class* object% (#; http-connection<%>)
     (init-field parent in out)
     (super-new)
 
     (define/public (live?)
-      (and in out (not (port-closed? in)) (not (port-closed? out))))
+      (and (let ([in in]) (and in (not (port-closed? in))))
+           (let ([out out]) (and out (not (port-closed? out))))))
 
-    (define/public (close)
+    #;
+    (define/private (close)
       (when out (close-output-port out) (set! out #f))
       (when in (close-input-port in) (set! in #f)))
 
-    (define/public (abandon)
-      ;; Only abandon output port.
-      (when out (abandon-port out) (set! out #f)))
+    (define/private (abandon-in)
+      (when in (abandon-port in) (set! in #f)))
+    (define/private (abandon-out)
+      ((detach/make-abandon-out)))
+    (define/private (detach/make-abandon-out)
+      (cond [out => (lambda (p) (set! out #f) (lambda () (abandon-port p)))]
+            [else void]))
 
     ;; queue represents a queue of requests (and their connection controls) that
     ;; have been sent but whose responses have not been received.
 
-    (define queue-sema (make-semaphore 1))
+    (define lock (make-semaphore 1))
+    (define-syntax-rule (with-lock e ...) (sema-call lock (lambda () e ...)))
+
     (define queue null) ;; (Listof (cons Request ConnectionControl))
 
     (define/private (enqueue rqe)
-      (call-with-semaphore queue-sema
-        (lambda () (set! queue (append queue (list rqe))))))
+      (with-lock (set! queue (append queue (list rqe)))))
 
     (define/private (dequeue)
-      (call-with-semaphore queue-sema
-        (lambda ()
-          (and (pair? queue) (begin0 (car queue) (set! queue (cdr queue)))))))
+      (with-lock (and (pair? queue) (begin0 (car queue) (set! queue (cdr queue))))))
 
     ;; High-level SENDING connection states:
     ;; - send-any             -- basic connected state
     ;; - send-replayable      -- because (sent, unreceived) queue is non-empty
     ;; - cannot-send          -- because of sent Close or Upgrade
     (define/public (get-send-state)
-      (call-with-semaphore queue-sema (lambda () (-get-send-state))))
-
-    (define/private (-get-send-state)
-      (cond [(let ([out out]) (or (not out) (port-closed? out))) 'cannot-send]
+      (cond [(not (live?)) 'cannot-send]
             [(null? queue) 'send-any]
             [(for/or ([e (in-list queue)]) (control:may-end? (cdr e))) 'cannot-send]
             [else 'send-replayable]))
@@ -147,19 +150,24 @@
     #;(define last-send -inf.0)
 
     ;; ----------------------------------------
-    ;; Output Support
+    ;; Input/Output Support
 
-    (define out-sema (make-semaphore 1))
-    (define/private (release-output-mutex) (semaphore-post out-sema))
-    (define/private (output-mutex-held?) (semaphore-held? out-sema))
+    ;; Errors while sending/reading kill connection.
+    (define sending?-box (box #f))
+    (define reading?-box (box #f))
+    (define need-abandon-out? #f)
 
-    ;; Note: This *does not* release the mutex when the procedure returns,
-    ;; unless there is an error (and then it closes the connection).
-    (define/private (call/acquire-output-mutex proc)
-      (call/acquire-semaphore out-sema proc (lambda () (abandon))))
+    (define/private (call/start-sending proc)
+      (call/set-box! lock sending?-box proc (lambda () (abandon-out))))
+    (define/private (end-sending)
+      ((with-lock
+         (set-box! sending?-box #f)
+         (if need-abandon-out? (detach/make-abandon-out) void))))
 
-    ;; ----------------------------------------
-    ;; Input Support
+    (define/private (call/start-reading proc)
+      (call/set-box! lock reading?-box proc (lambda () (abandon-in))))
+    (define/private (end-reading)
+      (with-lock (set-box! reading?-box #f)))
 
     (define br
       (make-binary-reader in
@@ -169,34 +177,30 @@
                    (apply s-error fmt args #:code 'read))
          #:show-data? (lambda (br who) #f))))
 
-    (define in-sema (make-semaphore 1))
-    (define/private (release-input-mutex) (semaphore-post in-sema))
-    (define/private (input-mutex-held?) (semaphore-held? in-sema))
-
-    ;; Note: This *does not* release the mutex when the procedure returns,
-    ;; unless there is an error (and then it closes the connection).
-    (define/private (call/acquire-input-mutex proc)
-      (call/acquire-semaphore in-sema proc (lambda () (close))))
+    (define/private (abandon-out-from-reader)
+      ((with-lock  ;; need to sync with sending thread
+         (cond [(unbox sending?-box) (set! need-abandon-out? #t) void]
+               [else (detach/make-abandon-out)]))))
 
     ;; ----------------------------------------
     ;; Request and Response
 
     (define/public (sendrecv req ccontrol)
       ;; PRE: queue is empty! (FIXME)
-      (queue-request req ccontrol)
+      (send-request req ccontrol)
       (read-next-response))
 
     ;; ----------------------------------------
     ;; Request (Output)
 
-    ;; queue-request : Request ConnectionControl -> Boolean
+    ;; send-request : Request ConnectionControl -> Boolean
     ;; Returns #t if request sent and queued, #f if cannot send in current state.
-    (define/public (queue-request req ccontrol)
+    (define/public (send-request req ccontrol)
       (check-req-headers (request-headers req))
-      (call/acquire-output-mutex
+      (call/start-sending
        (lambda ()
          (define can-proceed?
-           (case (-get-send-state)
+           (case (get-send-state)
              [(send-any) #t]
              [(send-replayable) (request:can-replay? req)]
              [(cannot-send) #f]))
@@ -204,10 +208,10 @@
                 (define rqe (make-rqentry req ccontrol))
                 (-send-request req ccontrol)
                 (enqueue rqe)
-                (release-output-mutex)
+                (end-sending)
                 #t]
                [else
-                (release-output-mutex)
+                (end-sending)
                 #f]))))
 
     (define/private (-send-request req ccontrol)
@@ -248,7 +252,7 @@
              (write-bytes data out)]
             [else (void)])
       (flush-output out)
-      (when (eq? ccontrol 'close) (abandon)))
+      (when (eq? ccontrol 'close) (abandon-out)))
 
     (define/private (check-req-headers headers)
       (define reserved-header-rxs
@@ -282,7 +286,7 @@
 
     ;; PRE: `in` has input ready (as evt), even if eof
     (define/public (read-next-response)
-      (call/acquire-input-mutex
+      (call/start-reading
        (lambda ()
          (cond [(let ([in in])
                   (or (not in)
@@ -314,9 +318,10 @@
       (define close?
         (or (eq? ccontrol 'close)
             (send headers has-value? 'connection #"close")))
-      (when close? (abandon))
-      (define decoded-content (if no-content? #f (get-decoded-content-input headers)))
-      (when close? (close))
+      (when close? (abandon-out-from-reader))
+      (define decoded-content
+        (cond [no-content? (when close? (abandon-in)) #f]
+              [else (get-decoded-content-input headers close?)]))
       (new http11-response%
            (req req) (ccontrol ccontrol)
            (status-line status-line)
@@ -352,12 +357,12 @@
       ;; FIXME: others?
       (void))
 
-    (define/public (get-decoded-content-input headers)
-      (define raw-content (make-raw-content-input headers))
+    (define/public (get-decoded-content-input headers close?)
+      (define raw-content (make-raw-content-input headers close?))
       (make-decoded-content-input headers raw-content))
 
-    (define/private (make-raw-content-input headers) ;; -> Bytes or InputPort
-      (define (done) (release-input-mutex))
+    (define/private (make-raw-content-input headers close?) ;; -> Bytes or InputPort
+      (define (done) (end-reading) (when close? (abandon-in)))
       ;; Reference: https://tools.ietf.org/html/rfc7230, Section 3.3.3 (Message Body Length)
       (cond [(send headers has-value? 'transfer-encoding #"chunked") ;; Case 3
              (make-chunked-input-port done)]
@@ -365,7 +370,7 @@
              => (lambda (len) (make-length-limited-input len done))]
             [else ;; Case 7
              (log-http-debug "response without Transfer-Encoding or Content-Length")
-             (abandon)
+             (abandon-out-from-reader)
              (make-read-until-eof-input-port done)]))
 
     (define/private (make-decoded-content-input headers raw-content) ;; Bytes or InputPort
@@ -492,9 +497,11 @@
 
 ;; ------------------------------------------------------------
 
+#;
 (define (semaphore-held? sema)
   (not (sync/timeout 0 (semaphore-peek-evt sema))))
 
+#;
 (define (call/acquire-semaphore sema proc handle-error)
   (semaphore-wait sema)
   (with-handlers ([(lambda (e) #t)
@@ -502,5 +509,63 @@
                      (when (semaphore-held? sema)
                        (handle-error)
                        (semaphore-post sema))
+                     (raise e))])
+    (call-with-continuation-barrier proc)))
+
+#;
+(define (call/set-box! b proc handle-error)
+  (set-box! b #t)
+  (with-handlers ([(lambda (e) #t)
+                   (lambda (e)
+                     (when (unbox b)
+                       (handle-error)
+                       (set-box! b #f))
+                     (raise e))])
+    (call-with-continuation-barrier proc)))
+
+(define (call/set-box! sema b proc handle-error)
+  (sync-box-set! sema b #t)
+  (with-handlers ([(lambda (e) #t)
+                   (lambda (e)
+                     (when (unbox b)
+                       (handle-error)
+                       (sync-box-set! sema b #f))
+                     (raise e))])
+    (call-with-continuation-barrier proc)))
+
+(define (sema-call sema proc)
+  (let ([eb (break-enabled)])
+    (parameterize-break #f
+      (cond [eb (semaphore-wait/enable-break sema)]
+            [else (semaphore-wait sema)])
+      (begin0 (proc)
+        (semaphore-post sema)))))
+
+(define (sync-box-set! sema b v)
+  (sema-call sema (lambda () (set-box! b v))))
+
+#;
+(define (sync-box-swap! sema b v)
+  (define (maybe-call v) (if (procedure? v) (v) v))
+  (maybe-call
+   (if sema
+       (let ([eb (break-enabled)])
+         (parameterize-break #f
+           (cond [eb (semaphore-wait/enable-break sema)]
+                 [else (semaphore-wait sema)])
+           (begin0 (unbox b)
+             (set-box! b v)
+             (semaphore-post sema))))
+       (begin0 (unbox b)
+         (set-box! b v)))))
+
+#;
+(define (call/acquire/release acquire proc handle-error)
+  (acquire)
+  (with-handlers ([(lambda (e) #t)
+                   (lambda (e)
+                     (when (held?)
+                       (handle-error)
+                       (release))
                      (raise e))])
     (call-with-continuation-barrier proc)))
