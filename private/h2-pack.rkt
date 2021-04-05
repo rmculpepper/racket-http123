@@ -72,8 +72,16 @@
 
 (define keys-to-index-headers
   '(#":authority"
+    ;; #":path" ;; maybe?
+    #"accept-charset"
+    #"accept-language"
+    #"authorization"
+    #"cookie"
     #"content-type"
     #"host"
+    #"proxy-authorization"
+    #"referer"
+    #"transfer-encoding"
     #"user-agent"))
 
 ;; decode-headers : BinaryReader DTable -> (Listof NormalizedHeader)
