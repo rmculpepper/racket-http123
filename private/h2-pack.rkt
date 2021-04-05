@@ -49,13 +49,13 @@
     [(list key value)
      (define key* (normalize-key who key))
      (define key-index (or (hash-ref key-table key* #f)
-                           (dtable-find-key dt key* dtable-adjustment)))
+                           (dtable-find-key dt key* (dtable-adjustment))))
      (cond [(hash-ref key+value-table (list key* value) #f)
             => (lambda (index) (header:indexed index))]
-           [(dtable-find dt (list key* value) dtable-adjustment)
+           [(dtable-find dt (list key* value) (dtable-adjustment))
             => (lambda (index) (header:indexed index))]
            [(member key* keys-to-index-headers)
-            (dtable-add! dt (list (or key-index key*) value))
+            (dtable-add! dt (list key* value))
             (header:literal 'add (or key-index key*) value)]
            [key-index
             (header:literal 'no-add key-index value)]
@@ -65,8 +65,8 @@
 (define (normalize-key who key0)
   (let loop ([key key0])
     (cond [(bytes? key) key]
-          [(symbol? key) (normalize-key (symbol->string key))]
-          [(and (string? key) (regexp-match? (rx^$ TOKEN) key))
+          [(symbol? key) (loop (symbol->string key))]
+          [(and (string? key) (regexp-match? (rx^$ (rx ":?" TOKEN)) key))
            (string->bytes/latin-1 key)]
           [else (error who "bad header key\n  key: ~e" key0)])))
 
@@ -78,24 +78,29 @@
 
 ;; decode-headers : BinaryReader DTable -> (Listof NormalizedHeader)
 (define (decode-headers br dt)
+  (define header-reps (read-header-reps br))
+  (for/list ([hrep (in-list header-reps)])
+    (decode-header hrep dt)))
+
+(define (read-header-reps br)
   (let loop ()
     (cond [(b-at-limit? br) null]
-          [else
-           (define h (read-header-rep br))
-           (match h
-             [(header:indexed index)
-              (cons (table-ref dtable) (loop))]
-             [(header:literal mode key value)
-              (define e
-                (list* (if (bytes? key) key (car (table-ref dtable key)))
-                       value
-                       (case mode [(never-add) '(never-add)] [else '()])))
-              (when (eq? mode 'add) (dtable-add! dtable e))
-              (cons e (loop))]
-             [(header:maxsize new-maxsize)
-              (set-dtable-maxsize! dt new-maxsize)
-              (dtable-check-evict dt)
-              (loop)])])))
+          [else (cons (read-header-rep br) (loop))])))
+
+(define (decode-header h dt)
+  (match h
+    [(header:indexed index)
+     (table-ref dt index)]
+    [(header:literal mode key value)
+     (define e
+       (list* (if (bytes? key) key (car (table-ref dt key)))
+              value
+              (case mode [(never-add) '(never-add)] [else '()])))
+     (when (eq? mode 'add) (dtable-add! dt e))
+     e]
+    [(header:maxsize new-maxsize)
+     (set-dtable-maxsize! dt new-maxsize)
+     (dtable-check-evict dt)]))
 
 ;; ------------------------------------------------------------
 
@@ -108,13 +113,10 @@
    size         ;; current size
    ) #:mutable)
 
-;; dtable-adjustment : Nat, add to dtable index to get (global) index
-(define dtable-adjustment (add1 static-table-length))
-
 (define DTABLE-INIT-CAPACITY 16)
 
 (define (make-dtable max-size)
-  (make-vector DTABLE-INIT-CAPACITY 0 0 max-size 0))
+  (dtable (make-vector DTABLE-INIT-CAPACITY) 0 0 max-size 0))
 
 (define (dtable-copy dt)
   (match-define (dtable vec start count maxsize size) dt)
@@ -128,6 +130,9 @@
   (unless (< index count) (error who "index out of range\n  index: ~e" index))
   (remainder (+ start count -1 (- index))
              (vector-length vec)))
+
+;; dtable-adjustment : -> Nat, add to dtable index to get (global) index
+(define (dtable-adjustment) (add1 static-table-length))
 
 (define (dtable-find dt entry [adjust 0])
   (for/or ([index (in-range (dtable-count dt))])
@@ -178,7 +183,7 @@
 
 ;; read-intrep : BinaryReader Nat[1,8] Byte -> Nat
 (define (read-intrep br prefix b)
-  (let ([b (bitwise-bit-field b 0 (sub1 prefix))])
+  (let ([b (bitwise-bit-field b 0 prefix)])
     (define all-ones (sub1 (arithmetic-shift 1 prefix)))
     (cond [(= b all-ones)
            (+ all-ones (read-intrep-k br))]
@@ -211,15 +216,19 @@
   (define huffman? (bitwise-bit-set? b 7))
   (define len (read-intrep br 7 b))
   (define bs (b-read-bytes br len))
-  (if huffman? (h-decode bs #t) bs))
+  (if huffman? (h-decode bs) bs))
+
+(define H-ENC-MIN-LEN 0)        ;; FIXME?
+(define H-ENC-MAX-LEN +inf.0)   ;; FIXME?
 
 (define (write-string-literal out bs)
-  (define enc (h-encode bs))
-  (cond [(< (bytes-length enc) (bytes-length bs))
+  (define enc (and (<= H-ENC-MIN-LEN (bytes-length bs) H-ENC-MAX-LEN)
+                   (h-encode bs)))
+  (cond [(and enc (< (bytes-length enc) (bytes-length bs)))
          (write-intrep out 7 #b1 (bytes-length enc))
          (write-bytes enc out)]
         [else
-         (write-intrep out 7 #b0 (bytes-length enc))
+         (write-intrep out 7 #b0 (bytes-length bs))
          (write-bytes bs out)]))
 
 ;; 6 Binary Format
@@ -268,16 +277,16 @@
        [(no-add) (write-intrep out 4 #b0000 keyindex)]
        [(never-add) (write-intrep out 4 #b0001 keyindex)])
      (when (bytes? key) (write-string-literal out key))
-     (write-string-literal value)]
+     (write-string-literal out value)]
     [(header:maxsize new-maxsize)
      (write-intrep out 5 #b001 new-maxsize)]))
 
 ;; ------------------------------------------------------------
 
-(define (table-ref dtable index)
+(define (table-ref dt index)
   (if (<= index static-table-length)
       (static-table-ref index)
-      (dtable-ref dtable (- index 1 static-table-length))))
+      (dtable-ref dt (- index 1 static-table-length))))
 
 ;; ------------------------------------------------------------
 
@@ -691,3 +700,41 @@
   (define (done biti eos?)
     (values (get-output-bytes out) biti))
   (decode-rest start-biti))
+
+;; ============================================================
+
+(module+ test
+  (require racket/port
+           racket/pretty)
+  (pretty-print-columns 80)
+
+  (define ex-headers
+    '((#":method" #"GET")
+      (#":authority" #"www.racket-lang.org")
+      (#":path" #"/")
+      (#":scheme" #"https")
+      (#"host" #"www.racket-lang.org")
+      (#"user-agent" #"Racket (http123)")
+      (#"x-racket-thing" #"syntax-local-something")
+      (#"x-expect-not-huffman" #"{|~~ $& ~~|}")
+      (#"x-expect-huffman" #"00001111 00001111 00001111")))
+  (define enc-header-reps (encode-headers* ex-headers (make-dtable 512)))
+  ;(pretty-print enc-header-reps)
+
+  (define hblock
+    (call-with-output-bytes
+     (lambda (out) (encode-headers out ex-headers (make-dtable 512)))))
+  ;; hblock
+
+  (define dec-header-reps
+    (read-header-reps (make-binary-reader (open-input-bytes hblock)
+                                          #:limit (bytes-length hblock))))
+  (equal? dec-header-reps enc-header-reps)
+  ;(pretty-print dec-header-reps)
+
+  (define dec-headers
+    (decode-headers (make-binary-reader (open-input-bytes hblock)
+                                        #:limit (bytes-length hblock))
+                    (make-dtable 512)))
+  ;(pretty-print dec-headers)
+  (equal? dec-headers ex-headers))
