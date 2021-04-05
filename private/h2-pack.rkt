@@ -84,8 +84,9 @@
     #"transfer-encoding"
     #"user-agent"))
 
-;; decode-headers : BinaryReader DTable -> (Listof NormalizedHeader)
-(define (decode-headers br dt)
+;; decode-headers : Bytes DTable -> (Listof NormalizedHeader)
+(define (decode-headers bs dt)
+  (define br (make-binary-reader (open-input-bytes bs)))
   (define header-reps (read-header-reps br))
   (for/list ([hrep (in-list header-reps)])
     (decode-header hrep dt)))
@@ -122,6 +123,7 @@
    ) #:mutable)
 
 (define DTABLE-INIT-CAPACITY 16)
+(define DTABLE-INIT-MAXSIZE 4096)
 
 (define (make-dtable max-size)
   (dtable (make-vector DTABLE-INIT-CAPACITY) 0 0 max-size 0))

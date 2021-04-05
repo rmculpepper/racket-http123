@@ -6,26 +6,36 @@
 
 ;; ----------------------------------------
 
-(define (write-frame-header out len type flags stream-id)
+(define (write-frame out fr)
+  (match-define (frame type flags streamid payload) fr)
+  (write-frame-header out (payload-length payload) type flags streamid)
+  (write-frame-payload out flags payload))
+
+(define (write-frame-header out len type flags streamid)
   (write-integer len 3 #f out #t)
   (write-byte type out)
   (write-byte flags out)
-  (write-integer stream-id 4 #f out #t))
+  (write-integer streamid 4 #f out #t))
 
-(define (write-frame-payload out fp flags)
-  (define (write-padding)
-    (when (flags-has? flags flag:PADDED) (write-byte 0 out)))
+(define (write-frame-payload out flags payload)
+  (define (write-padlen padlen)
+    (when (flags-has? flags flag:PADDED) (write-byte padlen out)))
+  (define (write-padding padlen)
+    (when (flags-has? flags flag:PADDED) (write-bytes (make-bytes padlen 0) out)))
   (define (write-streamid streamid)
     (write-integer streamid 4 #f out))
-  (match fp
-    [(fp:data data)
-     (write-padding)
-     (write-bytes data out)]
-    [(fp:headers streamdep weight headerbf)
-     (write-padding)
-     (write-streamid streamdep)
-     (when (flags-has? flags flag:PRIORITY) (write-byte weight out))
-     (write-bytes headerbf out)]
+  (match payload
+    [(fp:data padlen data)
+     (write-padlen padlen)
+     (write-bytes data out)
+     (write-padding padlen)]
+    [(fp:headers padlen streamdep weight headerbf)
+     (write-padlen padlen)
+     (when (flags-has? flags flag:PRIORITY)
+       (write-streamid streamdep)
+       (write-byte weight out))
+     (write-bytes headerbf out)
+     (write-padding padlen)]
     [(fp:priority streamdep weight)
      (write-streamid streamdep)
      (write-byte weight out)]
@@ -34,12 +44,13 @@
     [(fp:settings settings)
      (for ([s (in-list settings)])
        (match-define (setting key val) s)
-       (write-integer key 2 #f out)
+       (write-integer (encode-setting-key key) 2 #f out)
        (write-integer val 4 #f out))]
-    [(fp:push_promise promised-streamid headerbf)
-     (write-padding)
+    [(fp:push_promise padlen promised-streamid headerbf)
+     (write-padlen padlen)
      (write-streamid promised-streamid)
-     (write-bytes headerbf out)]
+     (write-bytes headerbf out)
+     (write-padding padlen)]
     [(fp:ping opaque)
      (write-bytes opaque out)]
     [(fp:goaway last-streamid errorcode debug)
@@ -52,6 +63,33 @@
      (write-bytes headerbf out)]
     [(? bytes? bs)
      (write-bytes bs out)]))
+
+(define (payload-length flags payload)
+  (define (padding padlen)
+    (if (flags-has? flags flag:PADDING) (add1 padlen) 0))
+  (match payload
+    [(fp:data padlen data)
+     (+ (padding padlen) (bytes-length data))]
+    [(fp:headers padlen streamdep weight headerbf)
+     (+ (padding padlen) 4 1 (bytes-length headerbf))]
+    [(fp:priority streamdep weight)
+     (+ 4 1)]
+    [(fp:rst_stream errorcode)
+     (+ 4)]
+    [(fp:settings settings)
+     (* 6 (length settings))]
+    [(fp:push_promise padlen promised-streamid headerbf)
+     (+ (padding padlen) 4 (bytes-length headerbf))]
+    [(fp:ping opaque)
+     (+ (bytes-length opaque))]
+    [(fp:goaway last-streamid errorcode debug)
+     (+ 4 4 (bytes-length debug))]
+    [(fp:window_update increment)
+     (+ 4)]
+    [(fp:continuation headerbf)
+     (+ (bytes-length headerbf))]
+    [(? bytes? bs)
+     (bytes-length bs)]))
 
 (define (trim-streamid n)
   (bitwise-bit-field n 0 30))
@@ -76,7 +114,7 @@
                                     (define len (- (b-get-limit br) padlen))
                                     (when (< len 0) '_) ;; FIXME
                                     (b-push-limit br len)
-                                    (proc)))
+                                    (proc padlen)))
       ;; Note: MAY check padding is zero. We don't.
       (b-read-bytes br padlen)))
   (define (rest-of-payload)
@@ -84,16 +122,16 @@
   (match type
     [(== type:DATA)
      (discarding-padding
-      (lambda ()
+      (lambda (padlen)
         (define data (rest-of-payload))
-        (fp:data data)))]
+        (fp:data padlen data)))]
     [(== type:HEADERS)
      (discarding-padding
-      (lambda ()
-        (define streamdep (read-streamid br))
+      (lambda (padlen)
+        (define streamdep (if (flags-has? flags flag:PRIORITY) (read-streamid br) #f))
         (define weight (if (flags-has? flags flag:PRIORITY) (b-read-byte br) #f))
         (define headerbf (read-headerbf br))
-        (fp:headers streamdep weight headerbf)))]
+        (fp:headers padlen streamdep weight headerbf)))]
     [(== type:PRIORITY)
      (define streamdep (read-streamid br))
      (define weight (b-read-byte br))
@@ -105,16 +143,16 @@
      (define (read-setting)
        (define key (b-read-be-uint br 2))
        (define val (b-read-be-uint br 4))
-       (setting key val))
+       (setting (decode-setting-key key) val))
      (define settings
        (let loop () (if (b-at-limit? br) null (cons (read-setting) (loop)))))
      (fp:settings settings)]
     [(== type:PUSH_PROMISE)
      (discarding-padding
-      (lambda ()
+      (lambda (padlen)
         (define promised-streamid (read-streamid br))
         (define headerbf (read-headerbf br))
-        (fp:push_promise promised-streamid headerbf)))]
+        (fp:push_promise padlen promised-streamid headerbf)))]
     [(== type:PING)
      (define opaque (b-read-bytes br 8))
      (fp:ping opaque)]
@@ -194,11 +232,11 @@
 (define (frame:goaway? f) (eqv? (frame-type f) type:GOAWAY))
 (define (frame:window_update? f) (eqv? (frame-type f) type:WINDOW_UPDATE))
 
-(define flag:END_STREAM #x01)
-(define flag:PADDED #x08)
-(define flag:END_HEADERS #x04)
-(define flag:PRIORITY #x20)
 (define flag:ACK #x01)
+(define flag:END_STREAM #x01)
+(define flag:END_HEADERS #x04)
+(define flag:PADDED #x08)
+(define flag:PRIORITY #x20)
 
 (define (frame-has-flag? f flag)
   (flags-has? (frame-flags f) flag))
@@ -209,12 +247,12 @@
 ;; 6.1 DATA
 ;; Payload w/o padding: Data(*)
 ;; Flags: END_STREAM, PADDED
-(struct fp:data (data) #:prefab)
+(struct fp:data (padlen data) #:prefab)
 
 ;; 6.2 HEADERS
 ;; Payload w/o padding: StreamDep(4,uint), { Weight(1) }?, HeaderBlockFragment(*)
 ;; Flags: END_STREAM, END_HEADERS, PADDED, PRIORITY
-(struct fp:headers (streamdep weight headerbf) #:prefab)
+(struct fp:headers (padlen streamdep weight headerbf) #:prefab)
 
 ;; 6.3 PRIORITY
 ;; Payload: StreamDep(4,uint), Weight(1)
@@ -232,17 +270,29 @@
 (struct fp:settings (settings) #:prefab)
 (struct setting (key value) #:prefab)
 
-(define SETTINGS_HEADER_TABLE_SIZE #x01)
-(define SETTINGS_ENABLE_PUSH #x02)
-(define SETTINGS_MAX_CONCURRENT_STREAMS #x03)
-(define SETTINGS_INITIAL_WINDOW_SIZE #x04)
-(define SETTINGS_MAX_FRAME_SIZE #x05)
-(define SETTINGS_MAX_HEADER_LIST_SIZE #x06)
+(define (encode-setting-key key)
+  (case key
+    [(header-table-size) #x01]
+    [(enable-push) #x02]
+    [(max-concurrent-streams) #x03]
+    [(initial-window-size) #x04]
+    [(max-frame-size) #x05]
+    [(max-header-list-size) #x06]
+    [else key]))
+(define (decode-setting-key n)
+  (case n
+    [(#x01) 'header-table-size]
+    [(#x02) 'enable-push]
+    [(#x03) 'max-concurrent-streams]
+    [(#x04) 'initial-window-size]
+    [(#x05) 'max-frame-size]
+    [(#x06) 'max-header-list-size]
+    [else n]))
 
 ;; 6.6 PUSH_PROMISE
 ;; Payload w/o padding: PromisedStreamID(4,uint), HeaderBlockFragment(*)
 ;; Flags: END_HEADERS, PADDED
-(struct fp:push_promise (promised-streamid headerbf) #:prefab)
+(struct fp:push_promise (padlen promised-streamid headerbf) #:prefab)
 
 ;; 6.7 PING
 ;; Payload: Opaque(8)
