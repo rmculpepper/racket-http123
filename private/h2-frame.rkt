@@ -1,6 +1,7 @@
 #lang racket/base
 (require racket/match
-         binaryio/integer)
+         binaryio/integer
+         binaryio/reader)
 (provide (all-defined-out))
 
 ;; ----------------------------------------
@@ -71,36 +72,36 @@
 (define (read-frame-payload br type flags)
   (define (discarding-padding proc)
     (define padlen (if (flags-has? flags flag:PADDED) (b-read-byte br) 0))
-    (begin0 (br-call/save-limit br (lambda ()
-                                     (define len (- (b-get-limit br) padlen))
-                                     (when (< len 0) '_) ;; FIXME
-                                     (b-push-limit br len)
-                                     (proc)))
+    (begin0 (b-call/save-limit br (lambda ()
+                                    (define len (- (b-get-limit br) padlen))
+                                    (when (< len 0) '_) ;; FIXME
+                                    (b-push-limit br len)
+                                    (proc)))
       ;; Note: MAY check padding is zero. We don't.
       (b-read-bytes br padlen)))
   (define (rest-of-payload)
     (b-read-bytes br (b-get-limit br)))
   (match type
-    [(== DATA)
+    [(== type:DATA)
      (discarding-padding
       (lambda ()
         (define data (rest-of-payload))
         (fp:data data)))]
-    [(== HEADERS)
+    [(== type:HEADERS)
      (discarding-padding
       (lambda ()
         (define streamdep (read-streamid br))
         (define weight (if (flags-has? flags flag:PRIORITY) (b-read-byte br) #f))
         (define headerbf (read-headerbf br))
         (fp:headers streamdep weight headerbf)))]
-    [(== PRIORITY)
+    [(== type:PRIORITY)
      (define streamdep (read-streamid br))
      (define weight (b-read-byte br))
      (fp:priority streamdep weight)]
-    [(== RST_STREAM)
+    [(== type:RST_STREAM)
      (define errorcode (b-read-be-uint br 4))
      (fp:rst_stream errorcode)]
-    [(== SETTINGS)
+    [(== type:SETTINGS)
      (define (read-setting)
        (define key (b-read-be-uint br 2))
        (define val (b-read-be-uint br 4))
@@ -108,24 +109,24 @@
      (define settings
        (let loop () (if (b-at-limit? br) null (cons (read-setting) (loop)))))
      (fp:settings settings)]
-    [(== PUSH_PROMISE)
+    [(== type:PUSH_PROMISE)
      (discarding-padding
       (lambda ()
         (define promised-streamid (read-streamid br))
         (define headerbf (read-headerbf br))
         (fp:push_promise promised-streamid headerbf)))]
-    [(== PING)
+    [(== type:PING)
      (define opaque (b-read-bytes br 8))
      (fp:ping opaque)]
-    [(== GOAWAY)
+    [(== type:GOAWAY)
      (define last-streamid (read-streamid br))
      (define errorcode (b-read-be-uint br 4))
      (define debug (rest-of-payload))
      (fp:goaway last-streamid errorcode debug)]
-    [(== WINDOW_UPDATE)
+    [(== type:WINDOW_UPDATE)
      (define increment (bitwise-bit-field (b-read-be-uint br 4) 0 30))
      (fp:window_update increment)]
-    [(== CONTINUATION)
+    [(== type:CONTINUATION)
      (define headerbf (read-headerbf br))
      (fp:continuation headerbf)]
     [_ (rest-of-payload)]))
@@ -181,6 +182,7 @@
 (define type:PING #x06)
 (define type:GOAWAY #x07)
 (define type:WINDOW_UPDATE #x08)
+(define type:CONTINUATION #x09)
 
 (define (frame:data? f) (eqv? (frame-type f) type:DATA))
 (define (frame:headers? f) (eqv? (frame-type f) type:HEADERS))
@@ -199,7 +201,10 @@
 (define flag:ACK #x01)
 
 (define (frame-has-flag? f flag)
-  (= (bitwise-and (frame-flags f) flag) flag))
+  (flags-has? (frame-flags f) flag))
+
+(define (flags-has? flags flag)
+  (= (bitwise-and flags flag) flag))
 
 ;; 6.1 DATA
 ;; Payload w/o padding: Data(*)
@@ -224,7 +229,7 @@
 ;; 6.5 SETTINGS
 ;; Payload: { SettingId(2,uint), Value(4) }*
 ;; Flags: ACK
-(struct fp:settings frame (settings) #:prefab)
+(struct fp:settings (settings) #:prefab)
 (struct setting (key value) #:prefab)
 
 (define SETTINGS_HEADER_TABLE_SIZE #x01)
@@ -257,7 +262,7 @@
 ;; 6.10 CONTINUATION
 ;; Payload: HeaderBlockFragment(*)
 ;; Flags: END_HEADERS
-(struct fp:continuation frame (headerbf) #:prefab)
+(struct fp:continuation (headerbf) #:prefab)
 
 ;; 7 Error Codes
 
