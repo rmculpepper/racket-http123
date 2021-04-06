@@ -2,11 +2,84 @@
 (require ffi/unsafe/atomic
          racket/tcp
          openssl)
-(provide (except-out (all-defined-out)
-                     unsafe-wrap-input-port)
-         (protect-out unsafe-wrap-input-port))
+(provide (all-defined-out))
 
-;; ----------------------------------------
+;; ============================================================
+
+;; Warning: this might interact strangely with finalization...
+(define abandon-table (make-weak-hasheq))
+
+;; Abandonability is not automatically propagated through
+;; prop:input-port and prop:output-port.
+
+(define (port-with-abandon? v)
+  (or (tcp-port? v) (ssl-port? v) (hash-has-key? abandon-table v)))
+
+(define (abandon-port p)
+  (cond [(tcp-port? p) (tcp-abandon-port p)]
+        [(ssl-port? p) (ssl-abandon-port p)]
+        [(hash-ref abandon-table p #f)
+         => (lambda (abandon) (abandon p))]
+        [else (error 'abandon-port "cannot abandon port: ~e" p)]))
+
+;; ============================================================
+
+(define (make-input-port* #:name name
+                          #:read-in read-in
+                          #:peek peek
+                          #:close close
+                          #:abandon [abandon #f]
+                          #:get-progress-evt [get-progress-evt #f]
+                          #:commit [commit #f]
+                          #:get-location [get-location #f]
+                          #:count-lines! [count-lines! void]
+                          #:init-position [init-position 1]
+                          #:buffer-mode [buffer-mode #f])
+  (define (make close)
+    (make-input-port name read-in peek close
+                     get-progress-evt commit get-location
+                     count-lines! init-position buffer-mode))
+  (cond [(procedure? abandon)
+         (define abandon-cell (make-thread-cell #f #f))
+         (define (close/check-for-abandon)
+           (if (thread-cell-ref abandon-cell)
+               (abandon)
+               (close)))
+         (define port (make close/check-for-abandon))
+         (define (do-abandon p)
+           (thread-cell-set! abandon-cell #t) (close-input-port))
+         (hash-set! abandon-table port do-abandon)]
+        [else (make close)]))
+
+(define (make-output-port* #:name name
+                           #:evt evt
+                           #:write-out write-out
+                           #:close close
+                           #:abandon [abandon #f]
+                           #:write-out-special [write-out-special #f]
+                           #:get-write-evt [get-write-evt #f]
+                           #:get-write-special-evt [get-write-special-evt #f]
+                           #:get-location [get-location #f]
+                           #:count-lines! [count-lines! void]
+                           #:init-position [init-position 1]
+                           #:buffer-mode [buffer-mode #f])
+  (define (make close)
+    (make-output-port name evt write-out close
+                      write-out-special get-write-evt get-write-special-evt
+                      get-location count-lines! init-position buffer-mode))
+  (cond [(procedure? abandon)
+         (define abandon-cell (make-thread-cell #f #f))
+         (define (close/check-for-abandon)
+           (if (thread-cell-ref abandon-cell)
+               (abandon)
+               (close)))
+         (define port (make close/check-for-abandon))
+         (define (do-abandon p)
+           (thread-cell-set! abandon-cell #t) (close-output-port))
+         (hash-set! abandon-table port do-abandon)]
+        [else (make close)]))
+
+;; ============================================================
 
 (struct box-evt (b sema evt)
   #:property prop:evt (struct-field-index evt))
@@ -27,106 +100,59 @@
 
 ;; ----------------------------------------
 
-;; Warning: this might interact strangely with finalization...
-(define abandon-table (make-weak-hasheq))
-
-(define (port-with-abandon? v)
-  (or (tcp-port? v) (ssl-port? v) (hash-has-key? abandon-table v)))
-
-(define (abandon-port p)
-  (cond [(tcp-port? p) (tcp-abandon-port p)]
-        [(ssl-port? p) (ssl-abandon-port p)]
-        [(hash-ref abandon-table p #f)
-         => (lambda (abandon) (abandon p))]
-        [else (error 'abandon-port "cannot abandon port: ~e" p)]))
-
-;; ----------------------------------------
-
 (struct wrapped-input-port (in exnbe)
   #:property prop:input-port (struct-field-index in))
 
 (define (wrapped-input-port-raise aip e)
   (void (box-evt-set! (wrapped-input-port-exnbe aip) e)))
 
-(define (wrap-input-port in #:on-consume [on-consume void])
-  (unsafe-wrap-input-port in #:on-consume on-consume))
-
-(define (unsafe-wrap-input-port in
-                                #:on-consume [on-consume void]
-                                #:atomic-on-consume [atomic-on-consume void])
+;; FIXME: should reader receive exn immediately or in place of EOF?
+(define (wrap-input-port in #:delay-to-eof? [delay-to-eof? #f])
   (define exnbe (make-box-evt))
   (define exn-evt (wrap-evt exnbe raise))
+  ;; FIXME: could implement check directly, instead of via sync/timeout
+  (define (check-early) (unless delay-to-eof? (sync/timeout 0 exn-evt)))
+  (define (check-at-eof) (sync/timeout 0 exn-evt))
   (define name (object-name in))
-  ;; peek counts as consume, but don't double-count w/ other peek/write
-  (define peeked 0)
   (define (read-in buf)
-    (sync/timeout 0 exn-evt)
-    (start-atomic)
+    (check-early)
     (define r (read-bytes-avail!* buf in))
     (cond [(eqv? r 0)
-           (end-atomic)
            (choice-evt (handle-evt in (lambda (_in) (read-in buf)))
                        exn-evt)]
-          [else
-           (cond [(exact-nonnegative-integer? r)
-                  (cond [(<= r peeked)
-                         (set! peeked (- peeked r))
-                         (end-atomic)]
-                        [else
-                         (set! peeked 0)
-                         (atomic-on-consume (- r peeked))
-                         (end-atomic)
-                         (on-consume (- r peeked))])]
-                 [else (end-atomic) (void)])
-           r]))
+          [(eof-object? r) (check-at-eof) r]
+          [else r]))
   (define (peek buf skip progress-evt)
-    (sync/timeout 0 exn-evt)
-    (start-atomic)
+    (check-early)
     (define r (peek-bytes-avail!* buf skip progress-evt in))
     (cond [(eqv? r 0)
-           (end-atomic)
            (choice-evt (handle-evt in (lambda (_e) (peek buf skip progress-evt)))
                        (handle-evt (or progress-evt never-evt) (lambda (_e) #f))
                        exn-evt)]
-          [else
-           (cond [(exact-nonnegative-integer? r)
-                  (define new-peeked (+ skip r))
-                  (cond [(> new-peeked peeked)
-                         (define diff (- new-peeked peeked))
-                         (set! peeked new-peeked)
-                         (atomic-on-consume diff)
-                         (end-atomic)
-                         (on-consume diff)]
-                        [else (end-atomic) (void)])]
-                 [else (end-atomic) (void)])
-           r]))
-  (define abandon-box (box #f))
-  (define (close)
-    (if (unbox abandon-box)
-        (abandon-port in)
-        (close-input-port in)))
+          [(eof-object? r) (check-at-eof) r]
+          [else r]))
+  (define (close) (close-input-port))
+  (define (abandon) (abandon-port in))
   (define get-progress-evt
     (and (port-provides-progress-evts? in)
          (lambda () (port-progress-evt in))))
   (define (commit k progress-evt done)
-    ;; Note: not safe to call port-commit-peeked in atomic mode, in general.
-    (cond [(port-commit-peeked k progress-evt done in)
-           => (lambda (r) (start-atomic) (set! peeked (max 0 (- peeked k))) (end-atomic) r)]
-          [else #f]))
+    (check-early)
+    (port-commit-peeked k progress-evt done in))
   (define (get-location)
     (port-next-location in))
   (define (count-lines!)
     (port-count-lines! in))
-  (define port
-    (wrapped-input-port
-     (make-input-port name read-in peek close
-                      get-progress-evt commit
-                      get-location count-lines!)
-     exnbe))
-  (when (port-with-abandon? in)
-    (define (abandon p) (set-box! abandon-box #t) (close-output-port p))
-    (hash-set! abandon-table port abandon))
-  port)
+  (wrapped-input-port
+   (make-input-port* #:name name
+                     #:read-in read-in
+                     #:peek peek
+                     #:close close
+                     #:abandon (and (port-with-abandon? in) abandon)
+                     #:get-progress-evt get-progress-evt commit
+                     #:get-location get-location
+                     #:count-lines1 count-lines!)
+   exnbe))
 
 ;; ----------------------------------------
 
@@ -155,26 +181,10 @@
       (write-bytes buf out start (min end (+ start CHUNK)))
       (flush-output out))
     (when (zero? end) (flush-output out)))
-  (define (close-or-abandon abandon?)
-    (cond [abandon?
-           (DEBUG (eprintf "** abandoning\n"))
-           (flush)
-           (abandon-port out)]
-          [else
-           (DEBUG (eprintf "** closing\n"))
-           (flush)
-           (close-output-port out)]))
-  (define abandon-box (box #f))
-  (define close
-    (if (port-with-abandon? out)
-        (lambda () (close-or-abandon (unbox abandon-box)))
-        (lambda () (close-or-abandon #f))))
-  (define port
-    (make-output-port (object-name out)
-                      always-evt
-                      write-out
-                      close))
-  (when (port-with-abandon? out)
-    (define (abandon p) (set-box! abandon-box #t) (close-output-port p))
-    (hash-set! abandon-table port abandon))
-  port)
+  (define (close) (close-output-port out))
+  (define (abandon) (abandon-port out))
+  (make-output-port* #:name (object-name out)
+                     #:evt always-evt
+                     #:write-out write-out
+                     #:close close
+                     #:abandon (and (port-with-abandon? out) abandon)))
