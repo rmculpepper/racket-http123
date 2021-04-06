@@ -222,6 +222,7 @@
       (set! in-flow-window (+ in-flow-window)))
 
     (define/public (adjust-target-flow-window increment)
+      ;; FIXME: sending window_update frame is delayed until... ???
       (set! target-in-flow-window (+ target-in-flow-window increment)))
 
     (define/public (after-handle-frame)
@@ -230,23 +231,60 @@
         (queue-frame (frame type:UPDATE_WINDOW 0 0 (fp:update_window diff)))
         (set! in-flow-window target-in-flow-window))
       (flush-frames))
+
+
+    ;; ============================================================
+    ;; Connection threads (2 per connection)
+
+    ;; Manager thread
+    ;; - receives frames from reader thread, handles
+    ;; - receives work from streams/users, handles
+    ;; Reader thread
+    ;; - just reads frames from input, sends to manager
+
+    ;; FIXME: make kill-safe
+
+    (define/private (manager)
+      (define reader-evt
+        (handle-evt (thread-receive-evt)
+                    (lambda (tre)
+                      (define fr (thread-receive))
+                      (with-handlers ([exn?
+                                       (lambda (e)
+                                         ((error-display-handler) (exn-message e) e))])
+                        (handle-frame fr)))))
+      (let streamsloop ()
+        (define streams-evt
+          (apply choice-evt
+                 (for/list ([stream (in-hash-values stream-table)])
+                   (send stream get-work-evt))))
+        (define saved-last-server-id last-server-streamid)
+        (define saved-last-client-id last-client-streamid)
+        (let loop ()
+          (sync streams-evt reader-evt)
+          (if (and (= last-server-streamid saved-last-server-id)
+                   (= last-client-streamid saved-last-client-id))
+              (loop)
+              (streamsloop)))))
+
+    (define/private (reader)
+      (define fr (read-frame br))
+      ;; FIXME: handle reading errors...
+      (eprintf "<< ~e\n" fr)
+      (thread-send manager-thread fr)
+      (reader))
+
+    (define manager-thread (thread (lambda () (manager))))
+    (define reader-thread (thread (lambda () (reader))))
     ))
 
 ;; ========================================
 
-;; One manager thread per connection
-;; - receives frames from reader thread, handles
-;; - receives instructions from streams/users, handles
-;; One reader thread per connection
-;; - just reads frames from input, sends to manager
-
 ;; ========================================
 
-(define http2-stream%
+(define http2-stream-layer1%
   (class* object% ()
-    (init-field conn
-                streamid            ;; Nat
-                user)               ;; http2-stream-user%
+    (init-field conn streamid)
     (super-new)
 
     (define/public (client-originated?) (odd? streamid))
@@ -259,6 +297,21 @@
     ;; This layer cares about the state machine described in Section 5. It does
     ;; not deal with the structure of HTTP requests.
     ;; - flow windows
+
+    ;; ----------------------------------------
+    ;; Flow windows
+
+    ;; Stream-local limit on flow-controlled {sends, receives}.
+    (define out-flow-window INIT-FLOW-WINDOW)
+    (define in-flow-window INIT-FLOW-WINDOW)
+
+    (define/public (get-effective-out-flow-window)
+      (min out-flow-window (send conn get-out-flow-window)))
+
+    (define/public (adjust-in-flow-window delta)
+      (set! in-flow-window (+ in-flow-window delta))
+      ;; FIXME: check for negative window error
+      (send conn adjust-in-flow-window delta))
 
     ;; ----------------------------------------
     ;; Finite state machine
@@ -371,91 +424,13 @@
     (define/private (set-state! new-state)
       (define old-state state)
       (set! state new-state)
-      ;; FIXME: manage user-out/in-from-user ?
-      (case new-state
-        [(closed/by-peer-rst closed/by-peer-end closed/by-me-recently closed/by-me-old)
-         (unless (port-closed? out-to-user)
-           (close-output-port out-to-user)
-           ;; Remove this connection's contribution to global target in-flow-window.
-           (send conn adjust-target-in-flow-window (max 0 (- in-flow-window)))
-           (set! in-flow-window 0))]))
+      (when (and (state:closed? new-state) (not (state:closed? old-state)))
+        ;; Remove this connection's contribution to global target in-flow-window.
+        (send conn adjust-target-in-flow-window (max 0 (- in-flow-window)))
+        (set! in-flow-window 0))
+      (s2:set-state! old-state new-state))
 
     ;; ----------------------------------------
-    ;; Communication w/ user
-
-    ;; get-work-evt : -> Evt
-    ;; The manager thread syncs on this event to check if async work is
-    ;; available to be done on this stream (and to do it).
-    (define/public (get-work-evt)
-      (choice-evt update-flow-window-evt
-                  forward-data-from-user-evt))
-
-    ;; Pipe to user: Goal is to tie flow control to user's consumption of
-    ;; data. In particular, when user consumes N bytes, want to request another
-    ;; N bytes from server. But how to measure (and sync on) user consumption?
-    ;; Three ideas:
-    ;;   1. use progress-evt and file-position on user-in
-    ;;   2. make limited pipe, track writes; need data-queue and pump :(
-    ;;   3. wrap user-in to track reads (need to wrap for exns anyway...)
-    (define-values (user-in out-to-user) (make-pipe))
-    (define wrapped-user-in (wrap-input-port user-in))
-    (define user-in-last-position (file-position user-in))
-    (define user-in-last-progress-evt (port-progress-evt user-in)) ;; progress or close!
-
-    (define in-from-user #f) ;; PipeInputPort or #f, INV: only set in appropriate states
-
-    ;; evt for updating in-flow-window in response to user reads from user-in
-    (define update-flow-window-evt
-      (handle-evt (guard-evt (lambda () user-in-last-progress-evt))
-                  (lambda (ignored) (update-target-in-flow-window))))
-
-    ;; evt for forwarding data available from user to server as DATA frame
-    (define forward-data-from-user-evt
-      (handle-evt (guard-evt
-                   (lambda ()
-                     ;; Only check for user input if out-flow window is nonempty.
-                     (cond [(and in-from-user (positive? (get-effective-out-flow-window)))
-                            in-from-user]
-                           [else never-evt])))
-                  (lambda (ignored) (forward-data-from-user))))
-
-    ;; Stream-local limit on flow-controlled {sends, receives}.
-    (define out-flow-window INIT-FLOW-WINDOW)
-    (define in-flow-window INIT-FLOW-WINDOW)
-
-    (define/private (queue-frame fr)
-      ;; FIXME: check/change state
-      ;; FIXME: avoid sending multiple RST_STREAM frames, etc
-      (send conn queue-frame))
-
-    ;; ========================================
-    ;; Forwarding data from user
-
-    (define/private (forward-data-from-user)
-      ;; PRE: in-from-user is ready for input
-      (define (check-at-eof?)
-        (eof-object? (peek-bytes-avail!* (make-bytes 1) 0 #f in-from-user)))
-      (define (send-data data end?)
-        (queue-frame (frame type:DATA (if end? flag:END_STREAM 0) streamid data))
-        (when end? (close-input-port in-from-user)))
-      (define maxlen (min (get-effective-out-flow-window)
-                          (get-max-data-payload-length)))
-      (define buf (make-bytes maxlen))
-      (define r (read-bytes-avail!* buf in-from-user))
-      (cond [(eof-object? r) (send-data #"" #t)] ;; not possible; in-from-user is ready
-            [(< r maxlen) (send-data (subbytes buf 0 r) (check-at-eof?))]
-            [else (send-data buf (check-at-eof?))]))
-
-    (define/private (get-max-data-payload-length)
-      (define config (send conn get-config))
-      (min (hash-ref config 'max-frame-size)
-           ;; FIXME: make my preference for max frame size configurable
-           (expt 2 20)))
-
-    (define/private (get-effective-out-flow-window)
-      (min out-flow-window (send conn get-out-flow-window)))
-
-    ;; ========================================
     ;; Handling frames from server
 
     (define/public (handle-data-payload flags payload)
@@ -463,43 +438,16 @@
       (check-state 'data)
       (let ([len (payload-length flags payload)])
         (adjust-in-flow-window (- len)))
-      (write-bytes data out-to-user)
       (define end-stream? (flag-has? flags flag:END_STREAM))
-      (when end-stream? (check-state 'end_stream)))
-
-    (define/public (adjust-in-flow-window increment)
-      (set! in-flow-window (+ in-flow-window increment))
-      ;; FIXME: check for negative window error
-      (send conn adjust-in-flow-window increment))
-
-    ;; called in response to progress/closure in `user-in` port
-    (define/public (update-target-in-flow-window)
-      (cond [(port-closed? user-in) ;; don't want more data
-             (set! user-in-last-progress-evt never-evt)
-             (queue-frame (frame type:RST_FRAME 0 streamid (fp:rst_stream errorcode)))]
-            [else ;; want increment more data
-             (define (update-user-in-stats!/get-delta)
-               ;; FIXME: get file-position and port-progress-evt atomically ??
-               (define position (file-position user-in))
-               (define progress-evt (port-progress-evt user-in))
-               (define delta (- position user-in-last-position))
-               (set! user-in-last-position position)
-               (set! user-in-last-progress-evt user-in-progress-evt)
-               delta)
-             (define delta (update-user-in-stats!/get-delta))
-             (set! in-flow-window (+ in-flow-window delta))
-             (queue-frame (frame type:WINDOW_UPDATE 0 streamid (fp:window_update delta)))
-             (send conn adjust-target-flow-window delta)]))
-
-    ;; ----------------------------------------
+      (when end-stream? (check-state 'end_stream))
+      (s2:handle-data data end?))
 
     (define/public (handle-headers-payload flags payload)
       (match-define (fp:headers padlen _streamdep _weight hs) payload)
       (check-state 'headers)
-      (set! headers hs)
-      ;; FIXME: notify user?
       (define end-stream? (flag-has? flags flag:END_STREAM))
-      (when end-stream? (check-state 'end_stream)))
+      (when end-stream? (check-state 'end_stream))
+      (s2:handle-headers hs end?))
 
     (define/public (handle-priority-payload flags payload)
       (match-define (fp:priority streamdep weight) payload)
@@ -508,33 +456,225 @@
 
     (define/public (handle-push_promise-payload flags payload)
       (match-define (fp:push_promise padlen promised-streamid headers) payload)
-      (cond [(check-state '([(open half-closed/remote) #f]))
-             ...]
-            [else
-             ;; Note: server may have sent before receiving reset, so must still
-             ;; handle bookkeeping...
-             ___])
-      (send conn handle-push_promise promised-streamid headers))
+      (check-state 'push_promise)
+      (s2:handle-push_promise promised-streamid headers))
 
     (define/public (handle-rst_stream-payload flags payload)
       (match-define (fp:rst_stream errorcode) payload)
-      (cond [(check-state '(reserved/remote open half-closed/remote half/closed/local closed) closed)
-             ...]
-            [else ;; 'idle
-             ...])
-      (unless (port-closed? out-to-user)
-        (wrapped-port-raise wrapped-user-in (make-server-reset-stream-exn errorcode))
-        (close-output-port out-to-user)))
+      (check-state 'rst_stream)
+      (s2:handle-rst_stream errcode))
 
     (define/public (handle-window-update flags increment)
       (set! out-flow-window (+ out-flow-window increment))
       (unless (< out-flow-window FLOW-CONTROL-BOUND)
-        (stream-error error:FLOW_CONTROL_ERROR))
-      ;; FIXME: Does this enable additional writes?
-      (void))
+        (stream-error error:FLOW_CONTROL_ERROR)))
+
+    ;; ----------------------------------------
+    ;; Sending frames to the server
+
+    (define/private (queue-frame fr)
+      ;; FIXME: check/change state
+      (check-send-state ...)
+      ;; FIXME: avoid sending multiple RST_STREAM frames, etc
+      (send conn queue-frame))
+    ))
+
+(define http2-stream-layer2%
+  (class* http2-stream-layer1% ()
+    (inherit-field conn streamid)
+    (super-new)
 
     ;; ============================================================
     ;; Stream Layer 2
+
+    ;; This layer cares about HTTP and communicating with the user.
+
+    ;; An S2State is one of
+    ;; - 'before-request            -- none
+    ;; - 'sending-request-data      -- pump in-from-user to server (mod flow-window)
+    ;; - 'before-response           -- none
+    ;; - 'reading-response-data     -- pump server data to out-to-user (adj flow-window)
+    ;; - 'done                      -- whether successful or not
+
+    (define s2-state 'before-request)   ;; S2State
+
+    (define/public (s2:set-state! old-state1 new-state1)
+      (void))
+
+    (define/public (check-s2-state transition)
+      ;; A transition does not include push_promise or rst_stream.
+      (case s2-state
+        [(before-request)
+         (case transition
+           [(user-request)      (set-s2-state! 'sending-request-data)]
+           [(user-request+end)  (set-s2-state! 'before-response)]
+           [else (bad)])]
+        [(sending-request-data)
+         (case transition
+           [(end)               (set-s2-state! 'before-response)]
+           [else (bad)])]
+        [(before-response)
+         (case transition
+           [(headers)           (set-s2-state! 'reading-response-data)]
+           [(headers+end)       (set-s2-state! 'complete)]
+           [else (bad)])]
+        [(reading-response-data)
+         (case transition
+           [(data)              (void)]
+           [(end data+end)      (set-s2-state! 'done)]
+           [else (bad)])]
+        [(done)
+         (void)]))
+
+    (define/public (set-s2-state! new-s2-state)
+      (define old-s2-state s2-state)
+      (set! s2-state new-s2-state)
+      (case old-s2-state
+        [(before-request)        (teardown:before-request)]
+        [(sending-request-data)  (teardown:sending-request-data)]
+        [(before-response)       (teardown:before-response)]
+        [(reading-response-data) (teardown:reading-response-data)])
+      (case new-s2-state
+        [(sending-request-data)  (setup:sending-request-data)]
+        [(before-response)       (setup:before-response)]
+        [(reading-response-data) (setup:reading-response-data)]
+        [(done)                  (setup:done)]))
+
+    (define/public (teardown:before-request) (void))
+
+    (define/public (setup:sending-request-data)
+      (set! s2-work-evt
+            (handle-evt (guard-evt
+                         (lambda ()
+                           (cond [(port-closed? in-from-user)
+                                  ;; We read an EOF (user-out is closed), so
+                                  ;; in-from-user is always ready now; ignore.
+                                  never-evt]
+                                 [(not (positive? (get-effective-out-flow-window)))
+                                  ;; Only check if out-flow window is nonempty.
+                                  never-evt]
+                                 [else in-from-user])))
+                        (lambda (ignored) (send-request-data-from-user)))))
+
+    (define/public (teardown:sending-request-data)
+      (close-input-port in-from-user)
+      (set! s2-work-evt never-evt))
+
+    (define/public (setup:before-response) (void))
+    (define/public (teardown:before-response) (void))
+
+    (define/public (setup:reading-response-data)
+      (set! s2-work-evt
+            (handle-evt (guard-evt (lambda () user-in-last-progress-evt))
+                        (lambda (ignored) (update-target-in-flow-window)))))
+
+    (define/public (teardown:reading-response-data)
+      (set! s2-work-evt never-evt))
+
+    (define/public (setup:done) (void))
+
+    ;; ----------------------------------------
+
+    ;; The manager thread syncs on this event to check if async work is
+    ;; available to be done on this stream (and to do it).
+    ;; Determined by on s2-state.
+    (define s2-work-evt never-evt)  ;; Evt[Void]
+
+    (define/public (get-work-evt) s2-work-evt)
+
+    ;; Stage 1. Request
+    (init-field req)
+    ;; Stage 2. Sending request data
+    (define-values (in-from-user user-out) (make-pipe))
+    ;; Stage 4. Receive response header
+    (define resp-header-bxe (make-box-evt))
+    ;; Stage 3. Reading response data
+    ;; Want to tie flow control to user's consumption of data. That is, when
+    ;; user consumes N bytes, want to request another N bytes from server.
+    (define-values (user-in out-to-user) (make-pipe))
+    (define wrapped-user-in (wrap-input-port user-in))
+    (define user-in-last-position (file-position user-in))
+    (define user-in-last-progress-evt (port-progress-evt user-in)) ;; progress or close!
+
+    (define/public (get-user-communication)
+      (values user-out
+              resp-header-bxe
+              user-in))
+
+    ;; ----------------------------------------
+    ;; Initiate request
+
+    (define/public (initiate-request)
+      ...req...
+      (if ...
+          (check-s2-state 'user-request)
+          (check-s2-state 'user-request+end)))
+
+    ;; ----------------------------------------
+    ;; Handling frames from server
+
+    (define/public (s2:handle-data data end?)
+      (write-bytes data out-to-user)
+      (when end? (close-output-port out-to-user))
+      (check-s2-state (if end? 'data+end 'data)))
+
+    (define/public (s2:handle-headers headers end?)
+      (box-evt-set! resp-header-bxe headers)
+      (check-s2-state (if end? 'headers+end 'headers)))
+
+    (define/public (s2:handle-push_promise promised-streamid headers)
+      (send conn handle-push_promise promised-streamid headers))
+
+    (define/public (s2:handle-rst_stream errcode)
+      (set-s2-state! 'done))
+
+    ;; ----------------------------------------
+    ;; Sending request data from user
+
+    (define/private (send-request-data-from-user)
+      ;; PRE: in-from-user is ready for input
+      (define (check-at-eof?) ;; check for EOF w/o blocking
+        (eof-object? (peek-bytes-avail!* (make-bytes 1) 0 #f in-from-user)))
+      (define (send-data data end?)
+        (queue-frame (frame type:DATA (if end? flag:END_STREAM 0) streamid data))
+        ;; On EOF, close in-from-user so evt will ignore it.
+        (when end? (close-input-port in-from-user)))
+      (define len (min (get-effective-out-flow-window)
+                       (get-max-data-payload-length)))
+      (define buf (make-bytes len))
+      (define r (read-bytes-avail!* buf in-from-user))
+      (cond [(eof-object? r) (send-data #"" #t)]
+            [(< r len) (send-data (subbytes buf 0 r) (check-at-eof?))]
+            [else (send-data buf (check-at-eof?))]))
+
+    (define/private (get-max-data-payload-length)
+      (min (send conn get-config-value 'max-frame-size)
+           ;; FIXME: make my preference for max frame size configurable
+           (expt 2 20)))
+
+    ;; ----------------------------------------
+    ;; Updating flow window when user consumes data
+
+    ;; called in response to progress/closure in `user-in` port
+    (define/public (update-target-in-flow-window)
+      (cond [(port-closed? user-in) ;; don't want more data
+             (set! user-in-last-progress-evt never-evt)
+             (queue-frame (frame type:RST_FRAME 0 streamid (fp:rst_stream error:CANCEL)))
+             (check-s2-state 'end)]
+            [else ;; want increment more data
+             (define delta (update-user-in-mark/get-delta))
+             (set! in-flow-window (+ in-flow-window delta))
+             (queue-frame (frame type:WINDOW_UPDATE 0 streamid (fp:window_update delta)))
+             (send conn adjust-target-flow-window delta)]))
+
+    (define/privae (update-user-in-mark/get-delta)
+      ;; FIXME: get file-position and port-progress-evt atomically ??
+      (define position (file-position user-in))
+      (define progress-evt (port-progress-evt user-in))
+      (define delta (- position user-in-last-position))
+      (set! user-in-last-position position)
+      (set! user-in-last-progress-evt user-in-progress-evt)
+      delta)
 
     ))
 
@@ -542,15 +682,6 @@
 
 (define the-closed-stream
   '___)
-
-;; ----------------------------------------
-
-(define evt<%>
-  (interface* ()
-              ([prop:evt (lambda (self) (send self get-evt))])
-    get-evt
-    ))
-
 
 ;; ============================================================
 

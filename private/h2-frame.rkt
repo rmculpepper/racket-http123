@@ -96,6 +96,14 @@
 
 ;; ----------------------------------------
 
+(define (read-frame br)
+  (define-values (len type flags streamid) (read-frame-header br))
+  (define payload
+    (b-call/save-limit br (lambda ()
+                            (b-push-limit br len)
+                            (read-frame-payload br type flags))))
+  (frame type flags streamid payload))
+
 (define (read-frame-header br)
   (define len (b-read-be-uint br 3))
   (define type (b-read-byte br))
