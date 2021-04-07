@@ -91,13 +91,23 @@
                  (and (streamid-from-server? streamid)
                       (<= streamid last-server-streamid)))
              the-closed-stream]
-            [else
-             (define stream (new http2-stream% (conn this) (streamid streamid)))
-             (hash-set! stream-table streamid stream)
-             (cond [(streamid-from-client? streamid)
-                    (set! last-client-streamid streamid)]
-                   [(streamid-from-server? streamid)
-                    (set! last-server-streamid streamid)])]))
+            [(streamid-from-server? streamid)
+             (make-stream streamid #f #f)]
+            [fail-ok? #f]
+            [else (error 'get-stream "no such client stream: ~e" streamid)])) ;; FIXME
+
+    (define/public (new-client-stream req send-req?)
+      (make-stream (+ last-client-streamid 2) req send-req?))
+
+    (define/public (make-stream streamid req send-req?)
+      (define stream
+        (new http2-stream% (conn this) (streamid streamid) (req req) (send-req? send-req?)))
+      (hash-set! stream-table streamid stream)
+      (cond [(streamid-from-client? streamid)
+             (set! last-client-streamid streamid)]
+            [(streamid-from-server? streamid)
+             (set! last-server-streamid streamid)])
+      stream)
 
     ;; ----------------------------------------
     ;; Handling frames received from server
@@ -232,7 +242,6 @@
         (set! in-flow-window target-in-flow-window))
       (flush-frames))
 
-
     ;; ============================================================
     ;; Connection threads (2 per connection)
 
@@ -276,9 +285,31 @@
 
     (define manager-thread (thread (lambda () (manager))))
     (define reader-thread (thread (lambda () (reader))))
-    ))
 
-;; ========================================
+    ;; ========================================
+
+    ;; called by user thread
+    (define/public (open-request req)
+      (define stream (new-client-stream req #t))
+      ;; Stream automatically sends request headers.
+      (define-values (user-out resp-header-bxe user-in)
+        (send stream get-user-communication))
+      ;; User thread writes request content.
+      (match (request-data req)
+        [(? bytes? data)
+         (write-bytes data user-out)
+         (close-output-port user-out)]
+        [(? procedure? put-data)
+         (put-data (lambda (data) (write-bytes data user-out)))
+         (close-output-port user-out)]
+        [#f (close-output-port user-out)])
+      ;; Get response header. (Note: may receive raised-exception instead!)
+      (define resp-header (sync resp-header-bxe))
+      ;; ----
+      (define code (cond [(assoc #":status" resp-headers) => cdr] [else #f]))
+      (response2 resp-header user-in))
+
+    ))
 
 ;; ========================================
 
@@ -587,7 +618,7 @@
     ;; Stage 2. Sending request data
     (define-values (in-from-user user-out) (make-pipe))
     ;; Stage 4. Receive response header
-    (define resp-header-bxe (make-box-evt))
+    (define resp-header-bxe (make-box-evt #t))  ;; can be used to send raised-exn back
     ;; Stage 3. Reading response data
     ;; Want to tie flow control to user's consumption of data. That is, when
     ;; user consumes N bytes, want to request another N bytes from server.
@@ -619,7 +650,7 @@
       (check-s2-state (if end? 'data+end 'data)))
 
     (define/public (s2:handle-headers headers end?)
-      (box-evt-set! resp-header-bxe headers)
+      (box-evt-set! resp-header-bxe (lambda () headers))
       (check-s2-state (if end? 'headers+end 'headers)))
 
     (define/public (s2:handle-push_promise promised-streamid headers)

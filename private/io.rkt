@@ -83,6 +83,7 @@
 
 (struct box-evt (b sema evt)
   #:property prop:evt (struct-field-index evt))
+(define box-is-unset (gensym))
 
 (define (make-box-evt [call? #f])
   (define b (box #f))
@@ -95,8 +96,12 @@
   (box-evt b sema evt))
 
 (define (box-evt-set! be v)
-  (set-box! (box-evt-b be) v)
-  (void (semaphore-post (box-evt-sema be))))
+  (match-define (box-evt b sema evt) be)
+  (cond [(eq? (unbox b) box-is-unset)
+         (set-box! (box-evt-b be) v)
+         (void (semaphore-post (box-evt-sema be)))
+         #t]
+        [else #f]))
 
 ;; ----------------------------------------
 
