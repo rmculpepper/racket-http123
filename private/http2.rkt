@@ -15,6 +15,7 @@
          "request.rkt"
          "h2-frame.rkt"
          "h2-pack.rkt"
+         (only-in "http11.rkt" make-decode-input-wrapper) ;; FIXME
          file/gunzip)
 (provide (all-defined-out))
 
@@ -267,6 +268,8 @@
     ;; Manager thread
     ;; - receives frames from reader thread, handles
     ;; - receives work from streams/users, handles
+    ;; - must not call any user-supplied procedures, or block on any ports (okay
+    ;;   to write to out)
     ;; Reader thread
     ;; - just reads frames from input, sends to manager
 
@@ -339,8 +342,13 @@
       (define resp-headers (sync resp-headers-bxe))
       ;; ----
       (define code (cond [(assoc #":status" resp-headers) => cdr] [else #f]))
+      (define decode-mode
+        (cond [(member (list #"content-encoding" #"gzip") resp-headers) 'gzip]
+              [(member (list #"content-encoding" #"deflate") resp-headers) 'deflate]
+              [else #f]))
+      (define decoded-in (make-decode-input-wrapper decode-mode user-in))
       ;; FIXME
-      (list resp-headers user-in))
+      (list resp-headers decoded-in))
 
     ;; ========================================
 

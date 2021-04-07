@@ -154,7 +154,7 @@
                      #:commit commit
                      #:get-location get-location
                      #:count-lines! count-lines!)
-   (lambda (e) (box-evt-set! exnbe (lambda () (raise e))))))
+   (lambda (e) (box-evt-set! exnbe e))))
 
 (define (make-wrapped-pipe)
   (define-values (in out) (make-pipe))
