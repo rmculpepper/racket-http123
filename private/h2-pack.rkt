@@ -32,11 +32,13 @@
 ;; - Bytes          -- normal header or unsplit list-valued header
 ;; - (Listof Bytes) -- list-valued header
 
-;; encode-headers : OutputPort (Listof FlexibleHeader) State -> Void
-(define (encode-headers out headers dt #:who [who 'encode-headers])
+;; encode-headers : (Listof FlexibleHeader) State -> Void
+(define (encode-headers headers dt #:who [who 'encode-headers])
+  (define out (open-output-bytes))
   (define header-reps (encode-headers* headers dt #:who who))
   (for ([hrep (in-list header-reps)])
-    (write-header-rep out hrep)))
+    (write-header-rep out hrep))
+  (get-output-bytes out))
 
 (define (encode-headers* headers dt #:who [who 'encode-headers*])
   (for/list ([header (in-list headers)])

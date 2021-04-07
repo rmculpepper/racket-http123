@@ -13,6 +13,8 @@
          "regexp.rkt"
          "io.rkt"
          "request.rkt"
+         "h2-frame.rkt"
+         "h2-pack.rkt"
          file/gunzip)
 (provide (all-defined-out))
 
@@ -22,7 +24,7 @@
 (define http2-alpn-protocol #"h2")
 (define http2-client-preface #"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
 
-(define FLOW-CONTROL-BOUND (expt 2 31))
+(define FLOW-WINDOW-BOUND (expt 2 31))
 (define INIT-FLOW-WINDOW (sub1 (expt 2 16)))
 
 (define init-config
@@ -32,6 +34,11 @@
           'initial-window-size (sub1 (expt 2 16))
           'max-frame-size (expt 2 14)
           'max-header-list-size +inf.0))
+
+;; FIXME: temporary
+(define (connect host port)
+  (define-values (in out) (ssl-connect host port))
+  (new http2-actual-connection% (in in) (out out)))
 
 (define http2-actual-connection%
   (class* object% ()
@@ -59,6 +66,8 @@
     (define reading-dt (make-dtable (hash-ref config 'header-table-size)))
     (define sending-dt (make-dtable (hash-ref config 'header-table-size)))
 
+    (define/public (get-sending-dt) sending-dt)
+
     ;; ----------------------------------------
 
     (define/public (send-frames frs [flush? #t])
@@ -70,7 +79,8 @@
     (define/public (flush-frames) (send-frames null #t))
 
     (define/public (connection-error errorcode)
-      '___)
+      (send-frame (frame type:GOAWAY 0 0 (fp:goaway last-server-streamid errorcode #"")))
+      (raise 'connection-error))
 
     ;; ----------------------------------------
 
@@ -81,20 +91,16 @@
     (define last-server-streamid 0) ;; Nat -- last streamid used by server
     (define last-client-streamid 0) ;; Nat -- last streamid used by client
 
-    (define/public (get-stream streamid)
+    (define/public (get-stream streamid [fail-ok? #f])
       (cond [(zero? streamid)
-             (error 'get-stream "invalid streamid: zero")]
+             (connection-error error:PROTOCOL_ERROR)]
             [(hash-ref stream-table streamid #f)
              => values]
-            [(or (and (streamid-from-client? streamid)
-                      (<= streamid last-client-streamid))
-                 (and (streamid-from-server? streamid)
-                      (<= streamid last-server-streamid)))
-             the-closed-stream]
-            [(streamid-from-server? streamid)
+            [(and (streamid-from-server? streamid)
+                  (> streamid last-server-streamid))
              (make-stream streamid #f #f)]
             [fail-ok? #f]
-            [else (error 'get-stream "no such client stream: ~e" streamid)])) ;; FIXME
+            [else (connection-error error:STREAM_CLOSED)]))
 
     (define/public (new-client-stream req send-req?)
       (make-stream (+ last-client-streamid 2) req send-req?))
@@ -122,12 +128,12 @@
                 (cond [(flags-has? flags flag:END_HEADERS)
                        (define frs (reverse (cons fr in-continue-frames)))
                        (set! in-continue-frames null)
-                       (handle-headers-frames frs)]
+                       (handle-multipart-frames frs)]
                       [else (set! in-continue-frames (cons fr in-continue-frames))])]
                [_ (connection-error error:PROTOCOL_ERROR)])]
             [else (handle-frame* fr)]))
 
-    (define/public (handle-header-frames frs)
+    (define/public (handle-multipart-frames frs)
       (define rest-headerbfs
         (for/list ([fr (in-list frs)])
           (fp:continuation-headerbf (frame-payload fr))))
@@ -160,7 +166,7 @@
            [(== type:HEADERS)
             (check-stream-nonzero)
             (cond [(flags-has? flags flag:END_HEADERS)
-                   (handle-headers-frames (list fr))]
+                   (handle-multipart-frames (list fr))]
                   [else (set! in-continue-frames (list fr))])]
            [(== type:PRIORITY)
             (check-stream-nonzero)
@@ -184,7 +190,7 @@
             (when (zero? (hash-ref my-config 'enable-push))
               (connection-error error:PROTOCOL_ERROR))
             (cond [(flags-has? flags flag:END_HEADERS)
-                   (handle-headers-frames (list fr))]
+                   (handle-multipart-frames (list fr))]
                   [else (set! in-continue-frames (list fr))])]
            [(== type:PING)
             (check-stream-zero)
@@ -198,9 +204,9 @@
             (match-define (fp:window_update increment) payload)
             (when (zero? increment) (connection-error error:PROTOCOL_ERROR))
             (cond [(zero? streamid)
-                   (handle-connection-window-update flags increment)]
+                   (handle-connection-window_update flags increment)]
                   [else
-                   (send (stream) handle-window-update flags increment)])]
+                   (send (stream) handle-window_update flags increment)])]
            [(== type:CONTINUATION)
             (connection-error error:PROTOCOL_ERROR)]
            [_
@@ -223,9 +229,9 @@
       (set! config new-config)
       (send-frame (frame type:SETTINGS flag:ACK) 0 (fp:settings null)))
 
-    (define/public (handle-connection-window-update flags increment)
+    (define/public (handle-connection-window_update flags increment)
       (set! out-flow-window (+ out-flow-window increment))
-      (unless (< out-flow-window FLOW-CONTROL-BOUND)
+      (unless (< out-flow-window FLOW-WINDOW-BOUND)
         (connection-error error:FLOW_CONTROL_ERROR)))
 
     (define/public (adjust-in-flow-window increment)
@@ -238,7 +244,7 @@
     (define/public (after-handle-frame)
       (when (< in-flow-window target-in-flow-window)
         (define diff (- target-in-flow-window in-flow-window))
-        (queue-frame (frame type:UPDATE_WINDOW 0 0 (fp:update_window diff)))
+        (queue-frame (frame type:WINDOW_UPDATE 0 0 (fp:window_update diff)))
         (set! in-flow-window target-in-flow-window))
       (flush-frames))
 
@@ -252,6 +258,7 @@
     ;; - just reads frames from input, sends to manager
 
     ;; FIXME: make kill-safe
+    ;; FIXME: periodically prune closed streams from table
 
     (define/private (manager)
       (define reader-evt
@@ -262,7 +269,7 @@
                                        (lambda (e)
                                          ((error-display-handler) (exn-message e) e))])
                         (handle-frame fr)))))
-      (let streamsloop ()
+      (define (streamsloop)
         (define streams-evt
           (apply choice-evt
                  (for/list ([stream (in-hash-values stream-table)])
@@ -270,11 +277,14 @@
         (define saved-last-server-id last-server-streamid)
         (define saved-last-client-id last-client-streamid)
         (let loop ()
-          (sync streams-evt reader-evt)
+          (with-handlers ([(lambda (e) (eq? e 'escape-without-error)) void])
+            (sync streams-evt reader-evt))
           (if (and (= last-server-streamid saved-last-server-id)
                    (= last-client-streamid saved-last-client-id))
-              (loop)
-              (streamsloop)))))
+              (loop streams-evt)
+              (streamsloop))))
+      (with-handlers ([(lambda (e) (eq? e 'connection-error)) void])
+        (streamsloop)))
 
     (define/private (reader)
       (define fr (read-frame br))
@@ -292,30 +302,33 @@
     (define/public (open-request req)
       (define stream (new-client-stream req #t))
       ;; Stream automatically sends request headers.
-      (define-values (user-out resp-header-bxe user-in)
+      (define-values (user-out resp-headers-bxe user-in)
         (send stream get-user-communication))
       ;; User thread writes request content.
+      ;; FIXME: optimize, send short data bytes on stream initialization
       (match (request-data req)
         [(? bytes? data)
          (write-bytes data user-out)
          (close-output-port user-out)]
+        [#f (close-output-port user-out)]
         [(? procedure? put-data)
          (put-data (lambda (data) (write-bytes data user-out)))
-         (close-output-port user-out)]
-        [#f (close-output-port user-out)])
+         (close-output-port user-out)])
       ;; Get response header. (Note: may receive raised-exception instead!)
-      (define resp-header (sync resp-header-bxe))
+      (define resp-headers (sync resp-headers-bxe))
       ;; ----
       (define code (cond [(assoc #":status" resp-headers) => cdr] [else #f]))
-      (response2 resp-header user-in))
+      ;; FIXME
+      (list resp-headers user-in))
 
     ))
 
 ;; ========================================
 
-(define http2-stream-layer1%
+(define http2-stream%
   (class* object% ()
-    (init-field conn streamid)
+    (init-field conn streamid
+                req send-req?)
     (super-new)
 
     (define/public (client-originated?) (odd? streamid))
@@ -328,6 +341,13 @@
     ;; This layer cares about the state machine described in Section 5. It does
     ;; not deal with the structure of HTTP requests.
     ;; - flow windows
+
+    (define/private (connection-error errorcode)
+      (send conn connection-error errorcode))
+
+    (define/private (stream-error errorcode)
+      (queue-frame (frame type:RST_STREAM 0 streamid (fp:rst_stream errorcode)))
+      (set-s2-state! 'done))
 
     ;; ----------------------------------------
     ;; Flow windows
@@ -376,7 +396,7 @@
          (case transition
            [(headers) (set-state! 'half-closed/local)]
            [(rst_stream) (set-state! 'closed)]
-           [else (connection-error error:PROTCOL_ERROR)])]
+           [else (connection-error error:PROTOCOL_ERROR)])]
         [(open)
          (case transition
            [(end_stream) (set-state! 'half-closed/remote)]
@@ -403,7 +423,7 @@
          (connection-error error:STREAM_CLOSED)]  ;; Why connection error?
         [(closed/by-me-recently)
          ;; Must ignore frames received in this state.
-         (escape-without-error)]
+         (raise 'escape-without-error)]
         [(closed/by-me-old)  ;; FIXME: represent with different object instead?
          ;; connection vs stream error unspecified
          (connection-error error:STREAM_CLOSED)]))
@@ -461,6 +481,11 @@
         (set! in-flow-window 0))
       (s2:set-state! old-state new-state))
 
+    (define/private (state:closed? state)
+      (case state
+        [(closed/by-peer-rst closed/by-peer-end closed/by-me-recently closed/by-me-old) #t]
+        [else #f]))
+
     ;; ----------------------------------------
     ;; Handling frames from server
 
@@ -469,15 +494,15 @@
       (check-state 'data)
       (let ([len (payload-length flags payload)])
         (adjust-in-flow-window (- len)))
-      (define end-stream? (flag-has? flags flag:END_STREAM))
-      (when end-stream? (check-state 'end_stream))
+      (define end? (flags-has? flags flag:END_STREAM))
+      (when end? (check-state 'end_stream))
       (s2:handle-data data end?))
 
     (define/public (handle-headers-payload flags payload)
       (match-define (fp:headers padlen _streamdep _weight hs) payload)
       (check-state 'headers)
-      (define end-stream? (flag-has? flags flag:END_STREAM))
-      (when end-stream? (check-state 'end_stream))
+      (define end? (flags-has? flags flag:END_STREAM))
+      (when end? (check-state 'end_stream))
       (s2:handle-headers hs end?))
 
     (define/public (handle-priority-payload flags payload)
@@ -493,27 +518,33 @@
     (define/public (handle-rst_stream-payload flags payload)
       (match-define (fp:rst_stream errorcode) payload)
       (check-state 'rst_stream)
-      (s2:handle-rst_stream errcode))
+      (s2:handle-rst_stream errorcode))
 
-    (define/public (handle-window-update flags increment)
+    (define/public (handle-window_update flags increment)
       (set! out-flow-window (+ out-flow-window increment))
-      (unless (< out-flow-window FLOW-CONTROL-BOUND)
+      (unless (< out-flow-window FLOW-WINDOW-BOUND)
         (stream-error error:FLOW_CONTROL_ERROR)))
 
     ;; ----------------------------------------
     ;; Sending frames to the server
 
     (define/private (queue-frame fr)
-      ;; FIXME: check/change state
-      (check-send-state ...)
+      (match (frame-type fr)
+        [(== type:DATA)
+         (check-send-state 'data)
+         (when (frame-has-flag? fr flag:END_STREAM)
+           (check-send-state 'end_stream))]
+        [(== type:HEADERS)
+         (check-send-state 'headers)
+         (when (frame-has-flag? fr flag:END_STREAM)
+           (check-send-state 'end_stream))]
+        [(== type:RST_STREAM)
+         (check-send-state 'rst_stream)]
+        [(== type:WINDOW_UPDATE)
+         (check-send-state 'window_update)]
+        [_ (void)])
       ;; FIXME: avoid sending multiple RST_STREAM frames, etc
       (send conn queue-frame))
-    ))
-
-(define http2-stream-layer2%
-  (class* http2-stream-layer1% ()
-    (inherit-field conn streamid)
-    (super-new)
 
     ;; ============================================================
     ;; Stream Layer 2
@@ -534,6 +565,7 @@
 
     (define/public (check-s2-state transition)
       ;; A transition does not include push_promise or rst_stream.
+      (define (bad) (error 'check-s2-state "bad transition: ~e" transition)) ;; FIXME
       (case s2-state
         [(before-request)
          (case transition
@@ -605,6 +637,46 @@
     (define/public (setup:done) (void))
 
     ;; ----------------------------------------
+    ;; Initiate request
+
+    (define/private (initiate-request)
+      (cond [send-req?
+             (match-define (request method url headers data) req)
+             ;; FIXME: for http2, data must be #f or bytes or 'delayed
+             (define more-headers (make-http2-headers method url))
+             (define enc-headers (encode-headers (append more-headers headers)
+                                                 (send conn get-sending-dt)))
+             ;; FIXME: split into frames if necessary
+             (define no-content?
+               (or (eq? data #f)
+                   (and (bytes? data) (zero? (bytes-length data)))))
+             (queue-frame
+              (frame type:HEADERS
+                     (+ flag:END_HEADERS (if no-content? flag:END_STREAM 0))
+                     streamid
+                     (fp:headers 0 #f #f enc-headers)))
+             (if no-content?
+                 (check-s2-state 'user-request+end)
+                 (check-s2-state 'user-request))]
+            [else
+             (check-s2-state 'user-request+end)]))
+
+    ;; FIXME: pseudo-headers MUST appear first, contiguous
+    ;; FIXME: 8.1.2.2 forbids Connection header, others
+    (define/private (make-http2-headers method u)
+      (list (cons #":method" (symbol->bytes method))
+            (cons #":scheme" (string->bytes/utf-8 (url-scheme u)))
+            (cons #":authority" (url-authority->bytes u)) ;; SHOULD use instead of Host
+            (cons #":path" (url-path/no-fragment->bytes u))))
+
+    (define/private (url-path/no-fragment->bytes u)
+      (string->bytes/utf-8
+       (url->string (url #f #f #f #f (url-path-absolute? u) (url-path u) (url-query u) #f))))
+    (define/private (url-authority->bytes u)
+      (string->bytes/utf-8
+       (url->string (url #f #f (url-host u) (url-port u) #f null null #f))))
+
+    ;; ----------------------------------------
 
     ;; The manager thread syncs on this event to check if async work is
     ;; available to be done on this stream (and to do it).
@@ -613,17 +685,14 @@
 
     (define/public (get-work-evt) s2-work-evt)
 
-    ;; Stage 1. Request
-    (init-field req)
-    ;; Stage 2. Sending request data
+    ;; Stage 1. Sending request data
     (define-values (in-from-user user-out) (make-pipe))
-    ;; Stage 4. Receive response header
+    ;; Stage 2. Receive response header
     (define resp-header-bxe (make-box-evt #t))  ;; can be used to send raised-exn back
     ;; Stage 3. Reading response data
     ;; Want to tie flow control to user's consumption of data. That is, when
     ;; user consumes N bytes, want to request another N bytes from server.
-    (define-values (user-in out-to-user) (make-pipe))
-    (define wrapped-user-in (wrap-input-port user-in))
+    (define-values (user-in out-to-user raise-user-exn) (make-wrapped-pipe))
     (define user-in-last-position (file-position user-in))
     (define user-in-last-progress-evt (port-progress-evt user-in)) ;; progress or close!
 
@@ -631,15 +700,6 @@
       (values user-out
               resp-header-bxe
               user-in))
-
-    ;; ----------------------------------------
-    ;; Initiate request
-
-    (define/public (initiate-request)
-      ...req...
-      (if ...
-          (check-s2-state 'user-request)
-          (check-s2-state 'user-request+end)))
 
     ;; ----------------------------------------
     ;; Handling frames from server
@@ -672,11 +732,16 @@
         (when end? (close-input-port in-from-user)))
       (define len (min (get-effective-out-flow-window)
                        (get-max-data-payload-length)))
-      (define buf (make-bytes len))
-      (define r (read-bytes-avail!* buf in-from-user))
-      (cond [(eof-object? r) (send-data #"" #t)]
-            [(< r len) (send-data (subbytes buf 0 r) (check-at-eof?))]
-            [else (send-data buf (check-at-eof?))]))
+      ((with-handlers ([exn? (lambda (e) (abort-request-data) (lambda () (void)))])
+         (define buf (make-bytes len))
+         (define r (read-bytes-avail!* buf in-from-user))
+         (cond [(eof-object? r) (lambda () (send-data #"" #t))]
+               [(< r len) (lambda () (send-data (subbytes buf 0 r) (check-at-eof?)))]
+               [else (lambda () (send-data buf (check-at-eof?)))]))))
+
+    (define/private (abort-request-data)
+      (queue-frame (frame type:RST_STREAM 0 null (fp:rst_stream error:CANCEL)))
+      (set-s2-state! 'done))
 
     (define/private (get-max-data-payload-length)
       (min (send conn get-config-value 'max-frame-size)
@@ -690,7 +755,7 @@
     (define/public (update-target-in-flow-window)
       (cond [(port-closed? user-in) ;; don't want more data
              (set! user-in-last-progress-evt never-evt)
-             (queue-frame (frame type:RST_FRAME 0 streamid (fp:rst_stream error:CANCEL)))
+             (queue-frame (frame type:RST_STREAM 0 streamid (fp:rst_stream error:CANCEL)))
              (check-s2-state 'end)]
             [else ;; want increment more data
              (define delta (update-user-in-mark/get-delta))
@@ -698,84 +763,15 @@
              (queue-frame (frame type:WINDOW_UPDATE 0 streamid (fp:window_update delta)))
              (send conn adjust-target-flow-window delta)]))
 
-    (define/privae (update-user-in-mark/get-delta)
+    (define/private (update-user-in-mark/get-delta)
       ;; FIXME: get file-position and port-progress-evt atomically ??
       (define position (file-position user-in))
       (define progress-evt (port-progress-evt user-in))
       (define delta (- position user-in-last-position))
       (set! user-in-last-position position)
-      (set! user-in-last-progress-evt user-in-progress-evt)
+      (set! user-in-last-progress-evt progress-evt)
       delta)
 
+    ;; ============================================================
+    (initiate-request)
     ))
-
-;; ----------------------------------------
-
-(define the-closed-stream
-  '___)
-
-;; ============================================================
-
-#|
-(struct sync-vector (vec sema [unlocked #:mutable])
-(define (make-sync-vector n)
-  (sync-vector (make-vector n #f) (make-semaphore 0) 0))
-(define (sync-vector-add! sv k v) ;; must add in order from 0
-  (match-define (sync-vector vec sema _) sv)
-  (vector-set! vec k v)
-  (semaphore-post sema))
-(define (sync-vector-ref sv k)
-  (match-define (sync-vector vec sema unlocked) sv)
-  (let loop ([unlocked unlocked])
-    (if (< k unlocked)
-        (vector-ref vec k)
-        (begin (semaphore-wait sema)
-               (set-sync-vector-unlocked! sv (add1 unlocked))
-               (loop (add1 unlocked))))))
-|#
-
-(define-syntax (define-sync stx)
-  (syntax-case stx ()
-    [(_ name)
-     (with-syntax ([getter (format-id #'name "get-~a" #'name)]
-                   [install (format-id #'name "install-~a!" #'name)])
-       #'(begin (define tmp-field #f)
-                (define tmp-sema (make-semaphore 0))
-                (define tmp-peek (semaphore-peek-evt tmp-sema))
-                (define-syntax name (syntax-rules ()))
-                (define/public (getter) (sync tmp-peek) tmp-field)
-                (define/public (install v) (set! tmp-field v) (semaphore-post tmp-sema))))]))
-
-(define http2-stream-user%
-  (class* object% ()
-    (init-field req)
-    (super-new)
-
-    (define-sync send-request-headers)
-    (define-sync request-data-out)
-    (define-sync response-headers)
-    (define-sync response-data-in)
-    ;; FIXME: what about push_promises ??
-    ))
-
-(define (perform-request req)
-  (define u (...get-user-object...))
-  ((send su get-send-req-headers) ...req-headers...)
-  (define data-out (send su get-request-data-out))
-  ...write data to data-out, then close port...
-  (define resp-headers (send su get-resp-headers))
-  (define response-data-in (send su get-response-data-in))
-  ...read from response-data-in...
-  ...)
-
-;; on request, StreamUser
-;;   0.  sends request headers
-;;   1.  sends data (maybe)
-;;   2.  receives response headers
-;;   3.  receives data (via inputport)
-;;   4.  (maybe) receives push_promises, new Streams and StreamUser objects
-
-;; on push_promise, StreamUser
-;;   0'. receives synthetic request headers
-;;   2.  receives response headers
-;;   3.  ...same...

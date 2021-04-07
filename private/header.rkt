@@ -153,3 +153,6 @@
 
 (define (bytes-join bss sep)
   (apply bytes-append (add-between bss sep)))
+
+(define (symbol->bytes s)
+  (string->bytes/utf-8 (symbol->string s)))

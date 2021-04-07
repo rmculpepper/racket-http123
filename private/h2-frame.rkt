@@ -4,6 +4,11 @@
          binaryio/reader)
 (provide (all-defined-out))
 
+(define (streamid-from-server? streamid)
+  (even? streamid))
+(define (streamid-from-client? streamid)
+  (odd? streamid))
+
 ;; ----------------------------------------
 
 (define (write-frame out fr)
@@ -66,7 +71,7 @@
 
 (define (payload-length flags payload)
   (define (padding padlen)
-    (if (flags-has? flags flag:PADDING) (add1 padlen) 0))
+    (if (flags-has? flags flag:PADDED) (add1 padlen) 0))
   (match payload
     [(fp:data padlen data)
      (+ (padding padlen) (bytes-length data))]
