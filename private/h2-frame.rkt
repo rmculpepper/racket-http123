@@ -76,7 +76,9 @@
     [(fp:data padlen data)
      (+ (padding padlen) (bytes-length data))]
     [(fp:headers padlen streamdep weight headerbf)
-     (+ (padding padlen) 4 1 (bytes-length headerbf))]
+     (+ (padding padlen)
+        (if (flags-has? flags flag:PRIORITY) (+ 4 1) 0)
+        (bytes-length headerbf))]
     [(fp:priority streamdep weight)
      (+ 4 1)]
     [(fp:rst_stream errorcode)

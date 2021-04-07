@@ -43,7 +43,8 @@
   (new http2-actual-connection% (in in) (out out)))
 
 #;
-(begin (define req (request 'GET (string->url "https://www.google.com/") null #f))
+(begin (define hs '((#"user-agent" #"Racket (http123)") (#"accept-encoding" #"gzip")))
+       (define req (request 'GET (string->url "https://www.google.com/") hs #f))
        (define c (connect "www.google.com" 443))
        (define r (send c open-request req)))
 
@@ -87,8 +88,10 @@
       (for ([fr (in-list frs)]) (queue-frame fr)))
     (define/public (flush-frames) (flush-output out))
 
-    (define/public (connection-error errorcode)
-      (queue-frame (frame type:GOAWAY 0 0 (fp:goaway last-server-streamid errorcode #"")))
+    (define/public (connection-error errorcode [comment ""] #:debug [debug #""])
+      (eprintf "!!! connection-error ~s, ~s\n" errorcode comment)
+      (queue-frame (frame type:GOAWAY 0 0 (fp:goaway last-server-streamid errorcode debug)))
+      (error 'connection-error "bad")
       (raise 'connection-error))
 
     ;; ----------------------------------------
@@ -102,14 +105,14 @@
 
     (define/public (get-stream streamid [fail-ok? #f])
       (cond [(zero? streamid)
-             (connection-error error:PROTOCOL_ERROR)]
+             (connection-error error:PROTOCOL_ERROR "get streamid = 0")]
             [(hash-ref stream-table streamid #f)
              => values]
             [(and (streamid-from-server? streamid)
                   (> streamid last-server-streamid))
              (make-stream streamid #f #f)]
             [fail-ok? #f]
-            [else (connection-error error:STREAM_CLOSED)]))
+            [else (connection-error error:STREAM_CLOSED "unknown stream")]))
 
     (define/public (new-client-stream req send-req?)
       (make-stream (+ last-client-streamid 2) req send-req?))
@@ -139,12 +142,12 @@
                        (set! in-continue-frames null)
                        (handle-multipart-frames frs)]
                       [else (set! in-continue-frames (cons fr in-continue-frames))])]
-               [_ (connection-error error:PROTOCOL_ERROR)])]
+               [_ (connection-error error:PROTOCOL_ERROR "expected continuation")])]
             [else (handle-frame* fr)]))
 
     (define/public (handle-multipart-frames frs)
       (define rest-headerbfs
-        (for/list ([fr (in-list frs)])
+        (for/list ([fr (in-list (cdr frs))])
           (fp:continuation-headerbf (frame-payload fr))))
       (match (car frs)
         [(frame (== type:HEADERS) flags streamid
@@ -165,9 +168,9 @@
         [(frame type flags streamid payload)
          (define (stream) (get-stream streamid))
          (define (check-stream-zero)
-           (unless (= streamid 0) (connection-error error:PROTOCOL_ERROR)))
+           (unless (= streamid 0) (connection-error error:PROTOCOL_ERROR "want stream = 0")))
          (define (check-stream-nonzero)
-           (when (= streamid 0) (connection-error error:PROTOCOL_ERROR)))
+           (when (= streamid 0) (connection-error error:PROTOCOL_ERROR "want stream != 0")))
          (match type
            [(== type:DATA)
             (check-stream-nonzero)
@@ -188,16 +191,16 @@
             (match-define (fp:settings settings) payload)
             (cond [(flags-has? flags flag:ACK)
                    (unless (null? settings)
-                     (connection-error error:FRAME_SIZE_ERROR))
+                     (connection-error error:FRAME_SIZE_ERROR "non-empty settings ack"))
                    (unless (pair? my-configs/awaiting-ack)
-                     (connection-error error:PROTOCOL_ERROR))
+                     (connection-error error:PROTOCOL_ERROR "unexpected settings ack"))
                    (set! my-config (car my-configs/awaiting-ack))
                    (set! my-configs/awaiting-ack (cdr my-configs/awaiting-ack))]
                   [else (handle-settings settings)])]
            [(== type:PUSH_PROMISE)
             (check-stream-nonzero)
             (when (zero? (hash-ref my-config 'enable-push))
-              (connection-error error:PROTOCOL_ERROR))
+              (connection-error error:PROTOCOL_ERROR "push not enabled"))
             (cond [(flags-has? flags flag:END_HEADERS)
                    (handle-multipart-frames (list fr))]
                   [else (set! in-continue-frames (list fr))])]
@@ -212,13 +215,13 @@
             '___]
            [(== type:WINDOW_UPDATE)
             (match-define (fp:window_update increment) payload)
-            (when (zero? increment) (connection-error error:PROTOCOL_ERROR))
+            (when (zero? increment) (connection-error error:PROTOCOL_ERROR "zero increment"))
             (cond [(zero? streamid)
                    (handle-connection-window_update flags increment)]
                   [else
                    (send (stream) handle-window_update flags increment)])]
            [(== type:CONTINUATION)
-            (connection-error error:PROTOCOL_ERROR)]
+            (connection-error error:PROTOCOL_ERROR "unexpected continuation")]
            [_
             ;; Ignore unknown frames, per ??.
             (void)])]))
@@ -230,11 +233,11 @@
           (case key
             [(enable-push)
              (unless (memv value '(0 1))
-               (connection-error error:PROTOCOL_ERROR))]
+               (connection-error error:PROTOCOL_ERROR "bad enable_push value"))]
             [(initial-window-size)
              ;; FIXME: changes current stream windows???
              (unless (< value FLOW-WINDOW-BOUND)
-               (connection-error error:FLOW_CONTROL_ERROR))])
+               (connection-error error:FLOW_CONTROL_ERROR "window too large"))])
           (hash-set h key value)))
       (set! config new-config)
       (queue-frame (frame type:SETTINGS flag:ACK 0 (fp:settings null))))
@@ -242,7 +245,7 @@
     (define/public (handle-connection-window_update flags increment)
       (set! out-flow-window (+ out-flow-window increment))
       (unless (< out-flow-window FLOW-WINDOW-BOUND)
-        (connection-error error:FLOW_CONTROL_ERROR)))
+        (connection-error error:FLOW_CONTROL_ERROR "window too large")))
 
     (define/public (adjust-in-flow-window increment)
       (set! in-flow-window (+ in-flow-window)))
@@ -280,15 +283,18 @@
                                          ((error-display-handler) (exn-message e) e))])
                         (handle-frame fr)))))
       (define (streamsloop)
-        (define streams-evt
-          (apply choice-evt
-                 (for/list ([stream (in-hash-values stream-table)])
-                   (send stream get-work-evt))))
+        (define stream-evts
+          (for/list ([stream (in-hash-values stream-table)])
+            (send stream get-work-evt)))
+        (eprintf ".   manager streamsloop (~s)\n" (length stream-evts))
+        (define streams-evt (apply choice-evt stream-evts))
         (define saved-last-server-id last-server-streamid)
         (define saved-last-client-id last-client-streamid)
         (let loop ()
+          (eprintf ".   manager loop\n")
           (with-handlers ([(lambda (e) (eq? e 'escape-without-error)) void])
-            (sync streams-evt reader-evt))
+            (sync (wrap-evt streams-evt (lambda _ (eprintf "    did work\n")))
+                  reader-evt))
           (flush-frames)
           (if (and (= last-server-streamid saved-last-server-id)
                    (= last-client-streamid saved-last-client-id))
@@ -340,7 +346,9 @@
 
     (define/private (send-handshake)
       (write-bytes http2-client-preface out)
+      (define my-new-config my-config) ;; FIXME?
       (queue-frame (frame type:SETTINGS 0 0 (fp:settings null)))
+      (set! my-configs/awaiting-ack (list my-new-config))
       (flush-frames))
 
     (send-handshake)
@@ -366,8 +374,8 @@
     ;; not deal with the structure of HTTP requests.
     ;; - flow windows
 
-    (define/private (connection-error errorcode)
-      (send conn connection-error errorcode))
+    (define/private (connection-error errorcode [debug ""])
+      (send conn connection-error errorcode debug))
 
     (define/private (stream-error errorcode)
       (queue-frame (frame type:RST_STREAM 0 streamid (fp:rst_stream errorcode)))
@@ -410,17 +418,17 @@
         [(idle)
          (case transition
            [(headers) (set-state! 'open)]
-           [else (connection-error error:PROTOCOL_ERROR)])]
+           [else (connection-error error:PROTOCOL_ERROR "bad idle state tx")])]
         [(reserved/local) ;; Only for servers
          (case transition
            [(rst_stream) (set-state! 'closed)]
            [(window_update) (void)]
-           [else (connection-error error:PROTOCOL_ERROR)])]
+           [else (connection-error error:PROTOCOL_ERROR "bad reserved/local tx")])]
         [(reserved/remote)
          (case transition
            [(headers) (set-state! 'half-closed/local)]
            [(rst_stream) (set-state! 'closed)]
-           [else (connection-error error:PROTOCOL_ERROR)])]
+           [else (connection-error error:PROTOCOL_ERROR "bad reserved/remote tx")])]
         [(open)
          (case transition
            [(end_stream) (set-state! 'half-closed/remote)]
@@ -616,6 +624,7 @@
     (define/public (set-s2-state! new-s2-state)
       (define old-s2-state s2-state)
       (set! s2-state new-s2-state)
+      (eprintf "#   new state = ~s\n" new-s2-state)
       (case old-s2-state
         [(before-request)        (teardown:before-request)]
         [(sending-request-data)  (teardown:sending-request-data)]
@@ -678,7 +687,7 @@
               (frame type:HEADERS
                      (+ flag:END_HEADERS (if no-content? flag:END_STREAM 0))
                      streamid
-                     (fp:headers 0 #f #f enc-headers)))
+                     (fp:headers 0 0 0 enc-headers)))
              (if no-content?
                  (check-s2-state 'user-request+end)
                  (check-s2-state 'user-request))]
@@ -698,7 +707,7 @@
        (url->string (url #f #f #f #f (url-path-absolute? u) (url-path u) (url-query u) #f))))
     (define/private (url-authority->bytes u)
       (string->bytes/utf-8
-       (url->string (url #f #f (url-host u) (url-port u) #f null null #f))))
+       (if (url-port u) (format "~a:~a" (url-host u) (url-port u)) (url-host u))))
 
     ;; ----------------------------------------
 
@@ -734,6 +743,7 @@
       (check-s2-state (if end? 'data+end 'data)))
 
     (define/public (s2:handle-headers headers end?)
+      (eprintf ".   putting headers in box\n")
       (box-evt-set! resp-header-bxe (lambda () headers))
       (check-s2-state (if end? 'headers+end 'headers)))
 
