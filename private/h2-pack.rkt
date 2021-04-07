@@ -33,18 +33,20 @@
 ;; - (Listof Bytes) -- list-valued header
 
 ;; encode-headers : (Listof FlexibleHeader) State -> Void
-(define (encode-headers headers dt #:who [who 'encode-headers])
+(define (encode-headers headers dt #:who [who 'encode-headers]
+                        #:huffman? [huffman? #t]
+                        #:also-index [also-index null])
   (define out (open-output-bytes))
-  (define header-reps (encode-headers* headers dt #:who who))
+  (define header-reps (encode-headers* headers dt also-index #:who who))
   (for ([hrep (in-list header-reps)])
-    (write-header-rep out hrep))
+    (write-header-rep out hrep huffman?))
   (get-output-bytes out))
 
-(define (encode-headers* headers dt #:who [who 'encode-headers*])
+(define (encode-headers* headers dt [also-index null] #:who [who 'encode-headers*])
   (for/list ([header (in-list headers)])
-    (encode-header who header dt)))
+    (encode-header who header dt also-index)))
 
-(define (encode-header who header dt)
+(define (encode-header who header dt also-index)
   (match header
     [(list key value 'never-add)
      (define key* (normalize-key who key))
@@ -57,7 +59,8 @@
             => (lambda (index) (header:indexed index))]
            [(dtable-find dt (list key* value) (dtable-adjustment))
             => (lambda (index) (header:indexed index))]
-           [(member key* keys-to-index-headers)
+           [(or (member key* keys-to-index-headers)
+                (member key* also-index))
             (dtable-add! dt (list key* value))
             (header:literal 'add (or key-index key*) value)]
            [key-index
@@ -79,6 +82,7 @@
     #"accept-charset"
     #"accept-language"
     #"authorization"
+    #"cache-control"
     #"cookie"
     #"content-type"
     #"host"
@@ -89,12 +93,12 @@
 
 ;; decode-headers : Bytes DTable -> (Listof NormalizedHeader)
 (define (decode-headers bs dt)
-  (define br (make-binary-reader (open-input-bytes bs) #:limit (bytes-length bs)))
-  (define header-reps (read-header-reps br))
+  (define header-reps (read-header-reps bs))
   (for/list ([hrep (in-list header-reps)])
     (decode-header hrep dt)))
 
-(define (read-header-reps br)
+(define (read-header-reps bs)
+  (define br (make-binary-reader (open-input-bytes bs) #:limit (bytes-length bs)))
   (let loop ()
     (cond [(b-at-limit? br) null]
           [else (cons (read-header-rep br) (loop))])))
@@ -162,6 +166,7 @@
   (cond [(< count (vector-length vec))
          (vector-set! vec (remainder (+ start count) (vector-length vec)) entry)
          (set-dtable-size! dt (+ old-size (entry-size entry)))
+         (set-dtable-count! dt (add1 count))
          (dtable-check-evict dt)]
         [else
          (define new-vec (make-vector (* 3 (quotient (vector-length vec) 2))))
@@ -234,8 +239,9 @@
 (define H-ENC-MIN-LEN 0)        ;; FIXME?
 (define H-ENC-MAX-LEN +inf.0)   ;; FIXME?
 
-(define (write-string-literal out bs)
-  (define enc (and (<= H-ENC-MIN-LEN (bytes-length bs) H-ENC-MAX-LEN)
+(define (write-string-literal out bs huffman?)
+  (define enc (and huffman?
+                   (<= H-ENC-MIN-LEN (bytes-length bs) H-ENC-MAX-LEN)
                    (h-encode bs)))
   (cond [(and enc (< (bytes-length enc) (bytes-length bs)))
          (write-intrep out 7 #b1 (bytes-length enc))
@@ -279,7 +285,7 @@
          (define new-maxsize (read-intrep br 5 b))
          (header:maxsize new-maxsize)]))
 
-(define (write-header-rep out h)
+(define (write-header-rep out h huffman?)
   (match h
     [(header:indexed index)
      (write-intrep out 7 #b1 index)]
@@ -289,8 +295,8 @@
        [(add) (write-intrep out 6 #b01 keyindex)]
        [(no-add) (write-intrep out 4 #b0000 keyindex)]
        [(never-add) (write-intrep out 4 #b0001 keyindex)])
-     (when (bytes? key) (write-string-literal out key))
-     (write-string-literal out value)]
+     (when (bytes? key) (write-string-literal out key huffman?))
+     (write-string-literal out value huffman?)]
     [(header:maxsize new-maxsize)
      (write-intrep out 5 #b001 new-maxsize)]))
 
@@ -688,18 +694,83 @@
   (define enc-header-reps (encode-headers* ex-headers (make-dtable 512)))
   ;(pretty-print enc-header-reps)
 
-  (define hblock
-    (call-with-output-bytes
-     (lambda (out) (encode-headers out ex-headers (make-dtable 512)))))
+  (define hblock (encode-headers ex-headers (make-dtable 512)))
   ;; hblock
 
-  (define dec-header-reps
-    (read-header-reps (make-binary-reader (open-input-bytes hblock)
-                                          #:limit (bytes-length hblock))))
+  (define dec-header-reps (read-header-reps hblock))
   (equal? dec-header-reps enc-header-reps)
   ;(pretty-print dec-header-reps)
 
-  (define dec-headers
-    (decode-headers hblock (make-dtable 512)))
+  (define dec-headers (decode-headers hblock (make-dtable 512)))
   ;(pretty-print dec-headers)
-  (equal? dec-headers ex-headers))
+  (equal? dec-headers ex-headers)
+
+  ;; ============================================================
+
+  (require file/sha1)
+  ;;(define b1 (encode-headers '((#"custom-key" #"custom-header")) (make-dtable 4096)))
+  ;(define b1 (encode-headers '((#":path" #"/sample/path")) (make-dtable 4096)))
+  ;b1
+  ;(bytes->hex-string b1)
+
+  (define dt-shared (make-dtable 4096)) ;; Note: shared between consecutive examples!
+  (define b1 (encode-headers '((#":method" #"GET")
+                               (#":scheme" #"http")
+                               (#":path" #"/")
+                               (#":authority" #"www.example.com"))
+                             dt-shared #:huffman? #f))
+  (equal? (bytes->hex-string b1)
+          "828684410f7777772e6578616d706c652e636f6d")
+
+  (define b2 (encode-headers '((#":method" #"GET")
+                               (#":scheme" #"http")
+                               (#":path" #"/")
+                               (#":authority" #"www.example.com")
+                               (#"cache-control" #"no-cache"))
+                             dt-shared #:huffman? #f))
+  (equal? (bytes->hex-string b2)
+          "828684be58086e6f2d6361636865")
+
+  (define b3 (encode-headers '((#":method" #"GET")
+                               (#":scheme" #"https")
+                               (#":path" #"/index.html")
+                               (#":authority" #"www.example.com")
+                               (#"custom-key" #"custom-value"))
+                             dt-shared #:huffman? #f #:also-index '(#"custom-key")))
+  (equal? (bytes->hex-string b3)
+          "828785bf400a637573746f6d2d6b65790c637573746f6d2d76616c7565")
+
+  (define dt2 (make-dtable 4096)) ;; Note: shared between consecutive examples!
+  (define h1 (encode-headers '((#":method" #"GET")
+                               (#":scheme" #"http")
+                               (#":path" #"/")
+                               (#":authority" #"www.example.com"))
+                             dt2 #:huffman? #t))
+  (equal? (bytes->hex-string h1)
+          "828684418cf1e3c2e5f23a6ba0ab90f4ff")
+
+  (define h2 (encode-headers '((#":method" #"GET")
+                               (#":scheme" #"http")
+                               (#":path" #"/")
+                               (#":authority" #"www.example.com")
+                               (#"cache-control" #"no-cache"))
+                             dt2 #:huffman? #t))
+  (equal? (bytes->hex-string h2)
+          "828684be5886a8eb10649cbf")
+
+  (define h3 (encode-headers '((#":method" #"GET")
+                               (#":scheme" #"https")
+                               (#":path" #"/index.html")
+                               (#":authority" #"www.example.com")
+                               (#"custom-key" #"custom-value"))
+                             dt2 #:huffman? #t #:also-index '(#"custom-key")))
+  (equal? (bytes->hex-string h3)
+          "828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf")
+
+  ;(bytes->hex-string (h-encode #"no-cache"))
+  ;(h-decode (hex-string->bytes "a8eb10649cbf"))
+
+  ;;  (bytes->hex-string (h-encode #"www.example.com"))
+  ;;  (h-decode (bytes #xf1 #xe3 #xc2 #xe5 #xf2 #x3a #x6b #xa0 #xab #x90 #xf4 #xff))
+
+  (void))

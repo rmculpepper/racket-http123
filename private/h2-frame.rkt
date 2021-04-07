@@ -13,7 +13,7 @@
 
 (define (write-frame out fr)
   (match-define (frame type flags streamid payload) fr)
-  (write-frame-header out (payload-length payload) type flags streamid)
+  (write-frame-header out (payload-length flags payload) type flags streamid)
   (write-frame-payload out flags payload))
 
 (define (write-frame-header out len type flags streamid)
@@ -113,7 +113,7 @@
   (define len (b-read-be-uint br 3))
   (define type (b-read-byte br))
   (define flags (b-read-byte br))
-  (define stream-id (trim-streamid (b-read-be-uint 4)))
+  (define stream-id (trim-streamid (b-read-be-uint br 4)))
   (values len type flags stream-id))
 
 (define (read-streamid br)

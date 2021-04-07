@@ -37,8 +37,18 @@
 
 ;; FIXME: temporary
 (define (connect host port)
-  (define-values (in out) (ssl-connect host port))
+  (define-values (in out) (ssl-connect host port #:alpn '(#"h2")))
+  (unless (equal? (ssl-get-alpn-selected in) #"h2")
+    (error 'connect "failed to negotiate h2"))
   (new http2-actual-connection% (in in) (out out)))
+
+#;
+(begin (define req (request 'GET (string->url "https://www.google.com/") null #f))
+       (define c (connect "www.google.com" 443))
+       (define r (send c open-request req)))
+
+
+;; ============================================================
 
 (define http2-actual-connection%
   (class* object% ()
@@ -70,16 +80,15 @@
 
     ;; ----------------------------------------
 
-    (define/public (send-frames frs [flush? #t])
-      (for ([fr (in-list frs)]) (write-frame out fr))
-      (when flush? (flush-output out)))
-    (define/public (send-frame fr) (send-frames (list fr)))
-    (define/public (queue-frame fr) (queue-frames (list fr)))
-    (define/public (queue-frames frs) (send-frames frs #f))
-    (define/public (flush-frames) (send-frames null #t))
+    (define/public (queue-frame fr)
+      (eprintf "--> ~e\n" fr)
+      (write-frame out fr))
+    (define/public (queue-frames frs)
+      (for ([fr (in-list frs)]) (queue-frame fr)))
+    (define/public (flush-frames) (flush-output out))
 
     (define/public (connection-error errorcode)
-      (send-frame (frame type:GOAWAY 0 0 (fp:goaway last-server-streamid errorcode #"")))
+      (queue-frame (frame type:GOAWAY 0 0 (fp:goaway last-server-streamid errorcode #"")))
       (raise 'connection-error))
 
     ;; ----------------------------------------
@@ -89,7 +98,7 @@
     ;; or equal to last-{s,c}-streamid, it is closed.
     (define stream-table (make-hasheqv))
     (define last-server-streamid 0) ;; Nat -- last streamid used by server
-    (define last-client-streamid 0) ;; Nat -- last streamid used by client
+    (define last-client-streamid 1) ;; Nat -- last streamid used by client
 
     (define/public (get-stream streamid [fail-ok? #f])
       (cond [(zero? streamid)
@@ -184,7 +193,7 @@
                      (connection-error error:PROTOCOL_ERROR))
                    (set! my-config (car my-configs/awaiting-ack))
                    (set! my-configs/awaiting-ack (cdr my-configs/awaiting-ack))]
-                  [else (handle-settings)])]
+                  [else (handle-settings settings)])]
            [(== type:PUSH_PROMISE)
             (check-stream-nonzero)
             (when (zero? (hash-ref my-config 'enable-push))
@@ -194,7 +203,8 @@
                   [else (set! in-continue-frames (list fr))])]
            [(== type:PING)
             (check-stream-zero)
-            (send-frame (frame type:PING flag:ACK 0 payload))]
+            (queue-frame (frame type:PING flag:ACK 0 payload))
+            (flush-frames)]
            [(== type:GOAWAY)
             (check-stream-zero)
             (match-define (fp:goaway last-streamid errorcode debug) payload)
@@ -227,7 +237,7 @@
                (connection-error error:FLOW_CONTROL_ERROR))])
           (hash-set h key value)))
       (set! config new-config)
-      (send-frame (frame type:SETTINGS flag:ACK) 0 (fp:settings null)))
+      (queue-frame (frame type:SETTINGS flag:ACK 0 (fp:settings null))))
 
     (define/public (handle-connection-window_update flags increment)
       (set! out-flow-window (+ out-flow-window increment))
@@ -279,19 +289,24 @@
         (let loop ()
           (with-handlers ([(lambda (e) (eq? e 'escape-without-error)) void])
             (sync streams-evt reader-evt))
+          (flush-frames)
           (if (and (= last-server-streamid saved-last-server-id)
                    (= last-client-streamid saved-last-client-id))
-              (loop streams-evt)
+              (loop)
               (streamsloop))))
       (with-handlers ([(lambda (e) (eq? e 'connection-error)) void])
         (streamsloop)))
 
     (define/private (reader)
-      (define fr (read-frame br))
-      ;; FIXME: handle reading errors...
-      (eprintf "<< ~e\n" fr)
-      (thread-send manager-thread fr)
-      (reader))
+      (cond [(eof-object? (peek-byte in))
+             (eprintf "<-- EOF\n")
+             (void)]
+            [else
+             (define fr (read-frame br))
+             ;; FIXME: handle reading errors...
+             (eprintf "<-- ~e\n" fr)
+             (thread-send manager-thread fr void)
+             (reader)]))
 
     (define manager-thread (thread (lambda () (manager))))
     (define reader-thread (thread (lambda () (reader))))
@@ -320,6 +335,15 @@
       (define code (cond [(assoc #":status" resp-headers) => cdr] [else #f]))
       ;; FIXME
       (list resp-headers user-in))
+
+    ;; ========================================
+
+    (define/private (send-handshake)
+      (write-bytes http2-client-preface out)
+      (queue-frame (frame type:SETTINGS 0 0 (fp:settings null)))
+      (flush-frames))
+
+    (send-handshake)
 
     ))
 
@@ -544,7 +568,7 @@
          (check-send-state 'window_update)]
         [_ (void)])
       ;; FIXME: avoid sending multiple RST_STREAM frames, etc
-      (send conn queue-frame))
+      (send conn queue-frame fr))
 
     ;; ============================================================
     ;; Stream Layer 2
@@ -664,10 +688,10 @@
     ;; FIXME: pseudo-headers MUST appear first, contiguous
     ;; FIXME: 8.1.2.2 forbids Connection header, others
     (define/private (make-http2-headers method u)
-      (list (cons #":method" (symbol->bytes method))
-            (cons #":scheme" (string->bytes/utf-8 (url-scheme u)))
-            (cons #":authority" (url-authority->bytes u)) ;; SHOULD use instead of Host
-            (cons #":path" (url-path/no-fragment->bytes u))))
+      (list (list #":method" (symbol->bytes method))
+            (list #":scheme" (string->bytes/utf-8 (url-scheme u)))
+            (list #":authority" (url-authority->bytes u)) ;; SHOULD use instead of Host
+            (list #":path" (url-path/no-fragment->bytes u))))
 
     (define/private (url-path/no-fragment->bytes u)
       (string->bytes/utf-8
