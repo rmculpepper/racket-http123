@@ -1,5 +1,6 @@
 #lang racket/base
 (require ffi/unsafe/atomic
+         racket/match
          racket/tcp
          openssl)
 (provide (all-defined-out))
@@ -75,7 +76,7 @@
                (close)))
          (define port (make close/check-for-abandon))
          (define (do-abandon p)
-           (thread-cell-set! abandon-cell #t) (close-output-port))
+           (thread-cell-set! abandon-cell #t) (close-output-port p))
          (hash-set! abandon-table port do-abandon)]
         [else (make close)]))
 
@@ -86,7 +87,7 @@
 (define box-is-unset (gensym))
 
 (define (make-box-evt [call? #f])
-  (define b (box #f))
+  (define b (box box-is-unset))
   (define sema (make-semaphore 0))
   (define evt ;; FIXME: wrap or handle?
     (wrap-evt (semaphore-peek-evt sema)
@@ -105,12 +106,7 @@
 
 ;; ----------------------------------------
 
-(struct wrapped-input-port (in exnbe)
-  #:property prop:input-port (struct-field-index in))
-
-(define (wrapped-input-port-raise aip e)
-  (void (box-evt-set! (wrapped-input-port-exnbe aip) e)))
-
+;; wrap-input-port : InputPort -> (values InputPort (-> Exn Void))
 ;; FIXME: should reader receive exn immediately or in place of EOF?
 (define (wrap-input-port in #:delay-to-eof? [delay-to-eof? #f])
   (define exnbe (make-box-evt))
@@ -148,16 +144,22 @@
     (port-next-location in))
   (define (count-lines!)
     (port-count-lines! in))
-  (wrapped-input-port
+  (values
    (make-input-port* #:name name
                      #:read-in read-in
                      #:peek peek
                      #:close close
                      #:abandon (and (port-with-abandon? in) abandon)
-                     #:get-progress-evt get-progress-evt commit
+                     #:get-progress-evt get-progress-evt
+                     #:commit commit
                      #:get-location get-location
-                     #:count-lines1 count-lines!)
-   exnbe))
+                     #:count-lines! count-lines!)
+   (lambda (e) (box-evt-set! exnbe (lambda () (raise e))))))
+
+(define (make-wrapped-pipe)
+  (define-values (in out) (make-pipe))
+  (define-values (wrapped-in raise-exn) (wrap-input-port in))
+  (values wrapped-in out raise-exn))
 
 ;; ----------------------------------------
 
