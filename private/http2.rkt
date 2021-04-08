@@ -28,6 +28,8 @@
 (define FLOW-WINDOW-BOUND (expt 2 31))
 (define INIT-FLOW-WINDOW (sub1 (expt 2 16)))
 
+(define KEEP-AFTER-CLOSE-MS (* 2 1000.0)) ;; keep closed stream for 2s
+
 (define init-config
   (hasheq 'header-table-size 4096
           'enable-push 1
@@ -80,11 +82,21 @@
 
     (define/public (get-sending-dt) sending-dt)
 
+    ;; closed? : (U #f 'by-goaway 'by-error)
+    ;; This state is used by the manager and by user threads.
+    ;; The reader keeps reading until EOF.
+    (define closed? #f)
+
+    (define/private (set-closed! reason)
+      (unless closed?
+        (abandon-port out)
+        (set! closed? reason)))
+
     ;; ----------------------------------------
 
     (define/public (queue-frame fr)
-      (eprintf "--> ~e\n" fr)
-      (write-frame out fr))
+      (eprintf "--> ~a~e\n" (if closed? "DROPPING " "") fr)
+      (unless closed? (write-frame out fr)))
     (define/public (queue-frames frs)
       (for ([fr (in-list frs)]) (queue-frame fr)))
     (define/public (flush-frames) (flush-output out))
@@ -92,6 +104,8 @@
     (define/public (connection-error errorcode [comment ""] #:debug [debug #""])
       (eprintf "!!! connection-error ~s, ~s\n" errorcode comment)
       (queue-frame (frame type:GOAWAY 0 0 (fp:goaway last-server-streamid errorcode debug)))
+      (flush-frames)
+      (set-closed! 'by-error)
       (error 'connection-error "bad")
       (raise 'connection-error))
 
@@ -101,6 +115,7 @@
     ;; If a streamid has no entry in stream-table and it is less than
     ;; or equal to last-{s,c}-streamid, it is closed.
     (define stream-table (make-hasheqv))
+    (define streams-changed? #f)
     (define last-server-streamid 0) ;; Nat -- last streamid used by server
     (define last-client-streamid 1) ;; Nat -- last streamid used by client
 
@@ -115,12 +130,17 @@
             [fail-ok? #f]
             [else (connection-error error:STREAM_CLOSED "unknown stream")]))
 
+    (define/public (remove-stream streamid)
+      (set! streams-changed? #t)
+      (hash-remove! stream-table streamid))
+
     (define/public (new-client-stream req send-req?)
       (make-stream (+ last-client-streamid 2) req send-req?))
 
     (define/public (make-stream streamid req send-req?)
       (define stream
         (new http2-stream% (conn this) (streamid streamid) (req req) (send-req? send-req?)))
+      (set! streams-changed? #t)
       (hash-set! stream-table streamid stream)
       (cond [(streamid-from-client? streamid)
              (set! last-client-streamid streamid)]
@@ -212,8 +232,10 @@
            [(== type:GOAWAY)
             (check-stream-zero)
             (match-define (fp:goaway last-streamid errorcode debug) payload)
-            ;; FIXME
-            '___]
+            ;; last-streamid is the last streamid that we initiated that the server acks
+            (for ([(streamid stream) (in-hash stream-table)])
+              (send stream handle-goaway-payload payload))
+            (set-closed! 'by-goaway)]
            [(== type:WINDOW_UPDATE)
             (match-define (fp:window_update increment) payload)
             (when (zero? increment) (connection-error error:PROTOCOL_ERROR "zero increment"))
@@ -288,21 +310,20 @@
       (define (streamsloop)
         (define stream-evts
           (for/list ([stream (in-hash-values stream-table)])
-            (send stream get-work-evt)))
+            (guard-evt (lambda () (send stream get-work-evt)))))
         (eprintf ".   manager streamsloop (~s)\n" (length stream-evts))
         (define streams-evt (apply choice-evt stream-evts))
-        (define saved-last-server-id last-server-streamid)
-        (define saved-last-client-id last-client-streamid)
         (let loop ()
           (eprintf ".   manager loop\n")
           (with-handlers ([(lambda (e) (eq? e 'escape-without-error)) void])
-            (sync (wrap-evt streams-evt (lambda _ (eprintf "    did work\n")))
-                  reader-evt))
+            (sync streams-evt
+                  reader-evt
+                  #;(wrap-evt (alarm-evt (+ (current-inexact-milliseconds) 10000.0))
+                              (lambda (ignored) (eprintf "   manager is bored!\n")))))
           (flush-frames)
-          (if (and (= last-server-streamid saved-last-server-id)
-                   (= last-client-streamid saved-last-client-id))
-              (loop)
-              (streamsloop))))
+          (if (begin0 streams-changed? (set! streams-changed? #f))
+              (streamsloop)
+              (loop))))
       (with-handlers ([(lambda (e) (eq? e 'connection-error)) void])
         (streamsloop)))
 
@@ -560,6 +581,11 @@
       (check-state 'rst_stream)
       (s2:handle-rst_stream errorcode))
 
+    (define/public (handle-goaway-payload flags payload)
+      (match-define (fp:goaway last-streamid errorcode debug) payload)
+      (check-state 'rst_stream) ;; pretend
+      (s2:handle-goaway last-streamid errorcode debug))
+
     (define/public (handle-window_update flags increment)
       (set! out-flow-window (+ out-flow-window increment))
       (unless (< out-flow-window FLOW-WINDOW-BOUND)
@@ -675,7 +701,13 @@
     (define/public (teardown:reading-response-data)
       (set! s2-work-evt never-evt))
 
-    (define/public (setup:done) (void))
+    (define/public (setup:done)
+      (eprintf "... setting alarm\n")
+      (set! s2-work-evt
+            (handle-evt (alarm-evt (+ (current-inexact-milliseconds) KEEP-AFTER-CLOSE-MS))
+                        (lambda (ignore)
+                          (eprintf "... removing closed stream (~s)\n" streamid)
+                          (send conn remove-stream streamid)))))
 
     ;; ----------------------------------------
     ;; Initiate request
@@ -758,7 +790,10 @@
     (define/public (s2:handle-push_promise promised-streamid headers)
       (send conn handle-push_promise promised-streamid headers))
 
-    (define/public (s2:handle-rst_stream errcode)
+    (define/public (s2:handle-rst_stream errorcode)
+      (set-s2-state! 'done))
+
+    (define/public (s2:handle-goaway last-streamid errorcode debug)
       (set-s2-state! 'done))
 
     ;; ----------------------------------------
