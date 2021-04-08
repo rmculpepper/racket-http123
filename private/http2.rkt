@@ -110,7 +110,10 @@
       (queue-frame (frame type:GOAWAY 0 0 (fp:goaway last-server-streamid errorcode debug)))
       (flush-frames)
       (set-closed! 'by-error)
-      (error 'connection-error "bad")
+      (when #t
+        (let ([fake-exn (exn:fail (format "connection error: ~s, ~s" errorcode comment)
+                                  (current-continuation-marks))])
+          ((error-display-handler) (exn-message fake-exn) fake-exn)))
       (raise 'connection-error))
 
     ;; ----------------------------------------
@@ -369,6 +372,8 @@
          (close-output-port user-out)])
       ;; Get response header. (Note: may receive raised-exception instead!)
       (define resp-headers (sync resp-headers-bxe))
+      ;; FIXME: add alternative: if resp-headers is (cons 'retry ...moreinfo...)
+      ;;   then http2 is automatically retrying in new connection
       ;; ----
       (define code (cond [(assoc #":status" resp-headers) => cdr] [else #f]))
       (define decode-mode
@@ -716,6 +721,7 @@
     (define/private (initiate-request)
       (cond [send-req?
              (match-define (request method url headers data) req)
+             (log-http2-debug "#~s initiating ~s request" streamid method)
              ;; FIXME: for http2, data must be #f or bytes or 'delayed
              (define more-headers (make-http2-headers method url))
              (define enc-headers (encode-headers (append more-headers headers)
@@ -729,6 +735,7 @@
                      (+ flag:END_HEADERS (if no-content? flag:END_STREAM 0))
                      streamid
                      (fp:headers 0 0 0 enc-headers)))
+             ;; FIXME: if small data, send immediately (must check out-flow-window, though)
              (if no-content?
                  (check-s2-state 'user-request+end)
                  (check-s2-state 'user-request))]
