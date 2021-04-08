@@ -311,7 +311,7 @@
       (define (streamsloop)
         (define stream-evts
           (for/list ([stream (in-hash-values stream-table)])
-            (guard-evt (lambda () (send stream get-work-evt)))))
+            (send stream get-work-evt)))
         (eprintf ".   manager streamsloop (~s)\n" (length stream-evts))
         (define streams-evt (apply choice-evt stream-evts))
         (let loop ()
@@ -701,7 +701,7 @@
       (set! s2-work-evt
             (handle-evt (alarm-evt (+ (current-inexact-milliseconds) KEEP-AFTER-CLOSE-MS))
                         (lambda (ignore)
-                          (eprintf "... removing closed stream (~s)\n" streamid)
+                          (eprintf "... removing closed stream (#~s)\n" streamid)
                           (send conn remove-stream streamid)))))
 
     ;; ----------------------------------------
@@ -751,7 +751,10 @@
     ;; Determined by on s2-state.
     (define s2-work-evt never-evt)  ;; Evt[Void]
 
-    (define/public (get-work-evt) s2-work-evt)
+    (define/public (get-work-evt)
+      ;; Use guard-evt so manager automatically gets state changes without
+      ;; having to rescan all streams / etc.
+      (guard-evt (lambda () s2-work-evt)))
 
     ;; Stage 1. Sending request data
     (define-values (in-from-user user-out) (make-pipe))
