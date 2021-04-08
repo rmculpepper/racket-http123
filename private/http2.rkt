@@ -158,6 +158,15 @@
     ;; ----------------------------------------
     ;; Handling frames received from server
 
+    (define/public (handle-frame-or-other v)
+      (match v
+        [(? frame? fr) (handle-frame fr)]
+        ['EOF (unless closed?
+                ;; FIXME: update all streams like goaway?
+                (set-closed! 'EOF))]
+        ;; FIXME: read-exn, etc?
+        ))
+
     (define in-continue-frames null) ;; (Listof Frame), reversed
 
     (define/public (handle-frame fr)
@@ -314,7 +323,7 @@
                       (with-handlers ([exn?
                                        (lambda (e)
                                          ((error-display-handler) (exn-message e) e))])
-                        (handle-frame fr)))))
+                        (handle-frame-or-other fr)))))
       (define (streamsloop)
         (define work-evts
           (for/list ([stream (in-hash-values stream-table)])
@@ -339,6 +348,7 @@
     (define/private (reader)
       (cond [(eof-object? (peek-byte in))
              (log-http2-debug "<-- EOF")
+             (thread-send manager-thread 'EOF void)
              (void)]
             [else
              (define fr (read-frame br))
