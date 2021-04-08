@@ -67,3 +67,6 @@
 (define-rx OWS "[ \t]*")
 (define-rx TCHAR "[-^!#$&'*+._`|~a-zA-Z0-9]")
 (define-rx TOKEN (+ TCHAR))
+
+(define-rx lower-TCHAR "[-^!#$&'*+._`|~a-z0-9]")
+(define-rx lower-TOKEN (+ lower-TCHAR))

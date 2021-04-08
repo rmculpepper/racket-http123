@@ -35,18 +35,18 @@
 ;; encode-headers : (Listof FlexibleHeader) State -> Void
 (define (encode-headers headers dt #:who [who 'encode-headers]
                         #:huffman? [huffman? #t]
-                        #:also-index [also-index null])
+                        #:overrides [overrides #hash()])
   (define out (open-output-bytes))
-  (define header-reps (encode-headers* headers dt also-index #:who who))
+  (define header-reps (encode-headers* headers dt overrides #:who who))
   (for ([hrep (in-list header-reps)])
     (write-header-rep out hrep huffman?))
   (get-output-bytes out))
 
-(define (encode-headers* headers dt [also-index null] #:who [who 'encode-headers*])
+(define (encode-headers* headers dt [overrides #hash()] #:who [who 'encode-headers*])
   (for/list ([header (in-list headers)])
-    (encode-header who header dt also-index)))
+    (encode-header who header dt overrides)))
 
-(define (encode-header who header dt also-index)
+(define (encode-header who header dt overrides)
   (match header
     [(list key value 'never-add)
      (define key* (normalize-key who key))
@@ -59,37 +59,15 @@
             => (lambda (index) (header:indexed index))]
            [(dtable-find dt (list key* value) (dtable-adjustment))
             => (lambda (index) (header:indexed index))]
-           [(or (member key* keys-to-index-headers)
-                (member key* also-index))
-            (dtable-add! dt (list key* value))
-            (header:literal 'add (or key-index key*) value)]
-           [key-index
-            (header:literal 'no-add key-index value)]
            [else
-            (header:literal 'no-add key* value)])]))
-
-(define (normalize-key who key0)
-  (let loop ([key key0])
-    (cond [(bytes? key) key]
-          [(symbol? key) (loop (symbol->string key))]
-          [(and (string? key) (regexp-match? (rx^$ (rx ":?" TOKEN)) key))
-           (string->bytes/latin-1 key)]
-          [else (error who "bad header key\n  key: ~e" key0)])))
-
-(define keys-to-index-headers
-  '(#":authority"
-    ;; #":path" ;; maybe?
-    #"accept-charset"
-    #"accept-language"
-    #"authorization"
-    #"cache-control"
-    #"cookie"
-    #"content-type"
-    #"host"
-    #"proxy-authorization"
-    #"referer"
-    #"transfer-encoding"
-    #"user-agent"))
+            (case (key-index-mode overrides key*)
+              [(yes)
+               (dtable-add! dt (list key* value))
+               (header:literal 'add (or key-index key*) value)]
+              [(never)
+               (header:literal 'never-add (or key-index key*) value)]
+              [else
+               (header:literal 'no-add (or key-index key*) value)])])]))
 
 ;; decode-headers : Bytes DTable -> (Listof NormalizedHeader)
 (define (decode-headers bs dt)
@@ -117,6 +95,176 @@
     [(header:maxsize new-maxsize)
      (set-dtable-maxsize! dt new-maxsize)
      (dtable-check-evict dt)]))
+
+;; ------------------------------------------------------------
+
+(define (normalize-key who key0)
+  (let loop ([key key0])
+    (cond [(symbol? key) (or (common-symbol->bytes key)
+                             (loop (symbol->string key)))]
+          [(and (bytes? key) (ok-key-name? key)) key]
+          [(and (string? key) (ok-key-name? key))
+           (string->bytes/utf-8 (string-downcase key))]
+          [else (error who "bad header key\n  key: ~e" key0)])))
+
+(define (ok-key-name? s)
+  (or (regexp-match? (rx^$ lower-TOKEN) s)
+      (regexp-match? #rx"^:(?:authority|method|path|scheme|status)$" s)))
+
+;; based on static table of QPACK (for HTTP/3) draft 21
+(define (common-symbol->bytes sym)
+  (case sym
+    [(:authority)                       #":authority"]
+    [(:method)                          #":method"]
+    [(:path)                            #":path"]
+    [(:scheme)                          #":scheme"]
+    [(:status)                          #":status"]
+    [(accept)                           #"accept"]
+    [(accept-encoding)                  #"accept-encoding"]
+    [(accept-language)                  #"accept-language"]
+    [(accept-ranges)                    #"accept-ranges"]
+    [(access-control-allow-credentials) #"access-control-allow-credentials"]
+    [(access-control-allow-headers)     #"access-control-allow-headers"]
+    [(access-control-allow-methods)     #"access-control-allow-methods"]
+    [(access-control-allow-origin)      #"access-control-allow-origin"]
+    [(access-control-expose-headers)    #"access-control-expose-headers"]
+    [(access-control-request-headers)   #"access-control-request-headers"]
+    [(access-control-request-method)    #"access-control-request-method"]
+    [(age)                              #"age"]
+    [(alt-svc)                          #"alt-svc"]
+    [(authorization)                    #"authorization"]
+    [(cache-control)                    #"cache-control"]
+    [(content-disposition)              #"content-disposition"]
+    [(content-encoding)                 #"content-encoding"]
+    [(content-length)                   #"content-length"]
+    [(content-security-policy)          #"content-security-policy"]
+    [(content-type)                     #"content-type"]
+    [(cookie)                           #"cookie"]
+    [(date)                             #"date"]
+    [(early-data)                       #"early-data"]
+    [(etag)                             #"etag"]
+    [(expect-ct)                        #"expect-ct"]
+    [(forwarded)                        #"forwarded"]
+    [(if-modified-since)                #"if-modified-since"]
+    [(if-none-match)                    #"if-none-match"]
+    [(if-range)                         #"if-range"]
+    [(last-modified)                    #"last-modified"]
+    [(link)                             #"link"]
+    [(location)                         #"location"]
+    [(origin)                           #"origin"]
+    [(purpose)                          #"purpose"]
+    [(range)                            #"range"]
+    [(referer)                          #"referer"]
+    [(server)                           #"server"]
+    [(set-cookie)                       #"set-cookie"]
+    [(strict-transport-security)        #"strict-transport-security"]
+    [(timing-allow-origin)              #"timing-allow-origin"]
+    [(upgrade-insecure-requests)        #"upgrade-insecure-requests"]
+    [(user-agent)                       #"user-agent"]
+    [(vary)                             #"vary"]
+    [(x-content-type-options)           #"x-content-type-options"]
+    [(x-forwarded-for)                  #"x-forwarded-for"]
+    [(x-frame-options)                  #"x-frame-options"]
+    [(x-xss-protection)                 #"x-xss-protection"]
+    [else #f]))
+
+(define (key->symbol key) ;; PRE: key is normalized
+  (or (hash-ref common-bytes=>symbol key #f)
+      (string->symbol (bytes->string/utf-8 key))))
+
+(define common-bytes=>symbol
+  #hash((#":authority"                       . :authority)
+        (#":method"                          . :method)
+        (#":path"                            . :path)
+        (#":scheme"                          . :scheme)
+        (#":status"                          . :status)
+        (#"accept"                           . accept)
+        (#"accept-encoding"                  . accept-encoding)
+        (#"accept-language"                  . accept-language)
+        (#"accept-ranges"                    . accept-ranges)
+        (#"access-control-allow-credentials" . access-control-allow-credentials)
+        (#"access-control-allow-headers"     . access-control-allow-headers)
+        (#"access-control-allow-methods"     . access-control-allow-methods)
+        (#"access-control-allow-origin"      . access-control-allow-origin)
+        (#"access-control-expose-headers"    . access-control-expose-headers)
+        (#"access-control-request-headers"   . access-control-request-headers)
+        (#"access-control-request-method"    . access-control-request-method)
+        (#"age"                              . age)
+        (#"alt-svc"                          . alt-svc)
+        (#"authorization"                    . authorization)
+        (#"cache-control"                    . cache-control)
+        (#"content-disposition"              . content-disposition)
+        (#"content-encoding"                 . content-encoding)
+        (#"content-length"                   . content-length)
+        (#"content-security-policy"          . content-security-policy)
+        (#"content-type"                     . content-type)
+        (#"cookie"                           . cookie)
+        (#"date"                             . date)
+        (#"early-data"                       . early-data)
+        (#"etag"                             . etag)
+        (#"expect-ct"                        . expect-ct)
+        (#"forwarded"                        . forwarded)
+        (#"if-modified-since"                . if-modified-since)
+        (#"if-none-match"                    . if-none-match)
+        (#"if-range"                         . if-range)
+        (#"last-modified"                    . last-modified)
+        (#"link"                             . link)
+        (#"location"                         . location)
+        (#"origin"                           . origin)
+        (#"purpose"                          . purpose)
+        (#"range"                            . range)
+        (#"referer"                          . referer)
+        (#"server"                           . server)
+        (#"set-cookie"                       . set-cookie)
+        (#"strict-transport-security"        . strict-transport-security)
+        (#"timing-allow-origin"              . timing-allow-origin)
+        (#"upgrade-insecure-requests"        . upgrade-insecure-requests)
+        (#"user-agent"                       . user-agent)
+        (#"vary"                             . vary)
+        (#"x-content-type-options"           . x-content-type-options)
+        (#"x-forwarded-for"                  . x-forwarded-for)
+        (#"x-frame-options"                  . x-frame-options)
+        (#"x-xss-protection"                 . x-xss-protection)))
+
+;; ------------------------------------------------------------
+
+;; References:
+;; - https://github.com/nghttp2/nghttp2/blob/master/lib/nghttp2_hd.c
+;;   NEVER for Authorization (all), Cookie (w/ length < 20) because
+;;     they might contain low-entropy secrets
+;;   NO to :path, Age, Content-Length, ETag, If-Modified-Since, If-None-Match,
+;;     Location, Set-Cookie
+
+;; Default to indexing Authorization and Cookie. Maybe override if
+;; client expects to use low-entropy secrets.
+
+(define default-indexing-policy
+  #hash((default                . no)
+        (#":authority"          . yes)
+        (#":path"               . no)
+        (#"accept-charset"      . yes)
+        (#"accept-language"     . yes)
+        (#"age"                 . no)
+        (#"authorization"       . yes)
+        (#"cache-control"       . yes)
+        (#"content-length"      . no)
+        (#"cookie"              . yes)
+        (#"content-type"        . yes)
+        (#"etag"                . no)
+        (#"host"                . yes) ;; should not appear!
+        (#"if-modified-since"   . no)
+        (#"if-none-match"       . no)
+        (#"location"            . no)
+        (#"proxy-authorization" . yes)
+        (#"referer"             . yes)
+        (#"set-cookie"          . no)
+        (#"user-agent"          . yes)))
+
+(define (key-index-mode overrides key)
+  (or (hash-ref overrides key #f)
+      (hash-ref default-indexing-policy key #f)
+      (hash-ref overrides 'default #f)
+      (hash-ref default-indexing-policy key 'no)))
 
 ;; ------------------------------------------------------------
 
@@ -736,7 +884,7 @@
                                (#":path" #"/index.html")
                                (#":authority" #"www.example.com")
                                (#"custom-key" #"custom-value"))
-                             dt-shared #:huffman? #f #:also-index '(#"custom-key")))
+                             dt-shared #:huffman? #f #:overrides #hash((#"custom-key" . yes))))
   (equal? (bytes->hex-string b3)
           "828785bf400a637573746f6d2d6b65790c637573746f6d2d76616c7565")
 
@@ -763,7 +911,7 @@
                                (#":path" #"/index.html")
                                (#":authority" #"www.example.com")
                                (#"custom-key" #"custom-value"))
-                             dt2 #:huffman? #t #:also-index '(#"custom-key")))
+                             dt2 #:huffman? #t #:overrides #hash((#"custom-key" . yes))))
   (equal? (bytes->hex-string h3)
           "828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf")
 
