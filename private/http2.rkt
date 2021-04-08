@@ -485,10 +485,7 @@
          (connection-error error:STREAM_CLOSED)]  ;; Why connection error?
         [(closed/by-me-recently)
          ;; Must ignore frames received in this state.
-         (raise 'escape-without-error)]
-        [(closed/by-me-old)  ;; FIXME: represent with different object instead?
-         ;; connection vs stream error unspecified
-         (connection-error error:STREAM_CLOSED)]))
+         (raise 'escape-without-error)]))
 
     (define/private (check-send-state transition)
       ;; Section 5.1
@@ -531,8 +528,7 @@
         ;; Many flavors of closed state...
         [(closed/by-peer-rst) (my-error)]
         [(closed/by-peer-end) (my-error)]
-        [(closed/by-me-recently) (my-error)]
-        [(closed/by-me-old) (my-error)]))
+        [(closed/by-me-recently) (my-error)]))
 
     (define/private (set-state! new-state)
       (define old-state state)
@@ -545,7 +541,7 @@
 
     (define/private (state:closed? state)
       (case state
-        [(closed/by-peer-rst closed/by-peer-end closed/by-me-recently closed/by-me-old) #t]
+        [(closed/by-peer-rst closed/by-peer-end closed/by-me-recently) #t]
         [else #f]))
 
     ;; ----------------------------------------
