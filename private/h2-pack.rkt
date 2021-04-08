@@ -4,7 +4,8 @@
          binaryio/reader
          binaryio/bitvector
          binaryio/prefixcode
-         "regexp.rkt")
+         "regexp.rkt"
+         "header.rkt")
 (provide (all-defined-out))
 
 ;; Reference:
@@ -49,10 +50,10 @@
 (define (encode-header who header dt overrides)
   (match header
     [(list key value 'never-add)
-     (define key* (normalize-key who key))
+     (define key* (header-key->bytes key))
      (header:literal 'never-add key* value)]
     [(list key value)
-     (define key* (normalize-key who key))
+     (define key* (header-key->bytes key))
      (define key-index (or (hash-ref key-table key* #f)
                            (dtable-find-key dt key* (dtable-adjustment))))
      (cond [(hash-ref key+value-table (list key* value) #f)
@@ -95,136 +96,6 @@
     [(header:maxsize new-maxsize)
      (set-dtable-maxsize! dt new-maxsize)
      (dtable-check-evict dt)]))
-
-;; ------------------------------------------------------------
-
-(define (normalize-key who key0)
-  (let loop ([key key0])
-    (cond [(symbol? key) (or (common-symbol->bytes key)
-                             (loop (symbol->string key)))]
-          [(and (bytes? key) (ok-key-name? key)) key]
-          [(and (string? key) (ok-key-name? key))
-           (string->bytes/utf-8 (string-downcase key))]
-          [else (error who "bad header key\n  key: ~e" key0)])))
-
-(define (ok-key-name? s)
-  (or (regexp-match? (rx^$ lower-TOKEN) s)
-      (regexp-match? #rx"^:(?:authority|method|path|scheme|status)$" s)))
-
-;; based on static table of QPACK (for HTTP/3) draft 21
-(define (common-symbol->bytes sym)
-  (case sym
-    [(:authority)                       #":authority"]
-    [(:method)                          #":method"]
-    [(:path)                            #":path"]
-    [(:scheme)                          #":scheme"]
-    [(:status)                          #":status"]
-    [(accept)                           #"accept"]
-    [(accept-encoding)                  #"accept-encoding"]
-    [(accept-language)                  #"accept-language"]
-    [(accept-ranges)                    #"accept-ranges"]
-    [(access-control-allow-credentials) #"access-control-allow-credentials"]
-    [(access-control-allow-headers)     #"access-control-allow-headers"]
-    [(access-control-allow-methods)     #"access-control-allow-methods"]
-    [(access-control-allow-origin)      #"access-control-allow-origin"]
-    [(access-control-expose-headers)    #"access-control-expose-headers"]
-    [(access-control-request-headers)   #"access-control-request-headers"]
-    [(access-control-request-method)    #"access-control-request-method"]
-    [(age)                              #"age"]
-    [(alt-svc)                          #"alt-svc"]
-    [(authorization)                    #"authorization"]
-    [(cache-control)                    #"cache-control"]
-    [(content-disposition)              #"content-disposition"]
-    [(content-encoding)                 #"content-encoding"]
-    [(content-length)                   #"content-length"]
-    [(content-security-policy)          #"content-security-policy"]
-    [(content-type)                     #"content-type"]
-    [(cookie)                           #"cookie"]
-    [(date)                             #"date"]
-    [(early-data)                       #"early-data"]
-    [(etag)                             #"etag"]
-    [(expect-ct)                        #"expect-ct"]
-    [(forwarded)                        #"forwarded"]
-    [(if-modified-since)                #"if-modified-since"]
-    [(if-none-match)                    #"if-none-match"]
-    [(if-range)                         #"if-range"]
-    [(last-modified)                    #"last-modified"]
-    [(link)                             #"link"]
-    [(location)                         #"location"]
-    [(origin)                           #"origin"]
-    [(purpose)                          #"purpose"]
-    [(range)                            #"range"]
-    [(referer)                          #"referer"]
-    [(server)                           #"server"]
-    [(set-cookie)                       #"set-cookie"]
-    [(strict-transport-security)        #"strict-transport-security"]
-    [(timing-allow-origin)              #"timing-allow-origin"]
-    [(upgrade-insecure-requests)        #"upgrade-insecure-requests"]
-    [(user-agent)                       #"user-agent"]
-    [(vary)                             #"vary"]
-    [(x-content-type-options)           #"x-content-type-options"]
-    [(x-forwarded-for)                  #"x-forwarded-for"]
-    [(x-frame-options)                  #"x-frame-options"]
-    [(x-xss-protection)                 #"x-xss-protection"]
-    [else #f]))
-
-(define (key->symbol key) ;; PRE: key is normalized
-  (or (hash-ref common-bytes=>symbol key #f)
-      (string->symbol (bytes->string/utf-8 key))))
-
-(define common-bytes=>symbol
-  #hash((#":authority"                       . :authority)
-        (#":method"                          . :method)
-        (#":path"                            . :path)
-        (#":scheme"                          . :scheme)
-        (#":status"                          . :status)
-        (#"accept"                           . accept)
-        (#"accept-encoding"                  . accept-encoding)
-        (#"accept-language"                  . accept-language)
-        (#"accept-ranges"                    . accept-ranges)
-        (#"access-control-allow-credentials" . access-control-allow-credentials)
-        (#"access-control-allow-headers"     . access-control-allow-headers)
-        (#"access-control-allow-methods"     . access-control-allow-methods)
-        (#"access-control-allow-origin"      . access-control-allow-origin)
-        (#"access-control-expose-headers"    . access-control-expose-headers)
-        (#"access-control-request-headers"   . access-control-request-headers)
-        (#"access-control-request-method"    . access-control-request-method)
-        (#"age"                              . age)
-        (#"alt-svc"                          . alt-svc)
-        (#"authorization"                    . authorization)
-        (#"cache-control"                    . cache-control)
-        (#"content-disposition"              . content-disposition)
-        (#"content-encoding"                 . content-encoding)
-        (#"content-length"                   . content-length)
-        (#"content-security-policy"          . content-security-policy)
-        (#"content-type"                     . content-type)
-        (#"cookie"                           . cookie)
-        (#"date"                             . date)
-        (#"early-data"                       . early-data)
-        (#"etag"                             . etag)
-        (#"expect-ct"                        . expect-ct)
-        (#"forwarded"                        . forwarded)
-        (#"if-modified-since"                . if-modified-since)
-        (#"if-none-match"                    . if-none-match)
-        (#"if-range"                         . if-range)
-        (#"last-modified"                    . last-modified)
-        (#"link"                             . link)
-        (#"location"                         . location)
-        (#"origin"                           . origin)
-        (#"purpose"                          . purpose)
-        (#"range"                            . range)
-        (#"referer"                          . referer)
-        (#"server"                           . server)
-        (#"set-cookie"                       . set-cookie)
-        (#"strict-transport-security"        . strict-transport-security)
-        (#"timing-allow-origin"              . timing-allow-origin)
-        (#"upgrade-insecure-requests"        . upgrade-insecure-requests)
-        (#"user-agent"                       . user-agent)
-        (#"vary"                             . vary)
-        (#"x-content-type-options"           . x-content-type-options)
-        (#"x-forwarded-for"                  . x-forwarded-for)
-        (#"x-frame-options"                  . x-frame-options)
-        (#"x-xss-protection"                 . x-xss-protection)))
 
 ;; ------------------------------------------------------------
 

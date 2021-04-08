@@ -348,7 +348,7 @@
               [else #f]))
       (define decoded-in (make-decode-input-wrapper decode-mode user-in))
       ;; FIXME
-      (list resp-headers decoded-in))
+      (list (make-headers-from-lists resp-headers) decoded-in))
 
     ;; ========================================
 

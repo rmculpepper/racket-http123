@@ -101,7 +101,7 @@
                     fmt . args)
   (let/ec k
     (raise (exn:fail:http123
-            (format "~a: ~a" (or who (http123-who)) (apply format fmt args))
+            (format "~a: ~a" (or (http123-who) who) (apply format fmt args))
             (continuation-marks k)
             party code info))))
 

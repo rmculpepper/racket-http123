@@ -288,7 +288,7 @@
       (define method (request-method req))
       (define-values (status-line status-version status-code) (read-status-line))
       (define raw-headers (read-raw-headers))
-      (define headers (new headers% (raw-headers raw-headers)))
+      (define headers (make-headers-from-lines raw-headers #:party 'server))
       (define no-content? ;; RFC 7230 Section 3.3.3, cases 1 and 2
         (or (eq? method 'HEAD)
             (regexp-match? #rx"^1.." status-code) ;; Informational
@@ -332,15 +332,18 @@
 
     (define/private (check-headers method no-content? headers)
       (when (send headers has-key? 'content-length)
-        (send headers check-value 'content-length bytes->nat "nonnegative integer"))
+        (send headers check-value 'content-length bytes->nat "nonnegative integer"
+              #:party 'server))
       (when (send headers has-key? 'transfer-encoding)
         (send headers check-value 'transfer-encoding
               (lambda (b) (equal? b #"chunked"))
-              (format "~s" #"chunked")))
+              (format "~s" #"chunked")
+              #:party 'server))
       (when (send headers has-key? 'content-encoding)
         (send headers check-value 'content-encoding
               (lambda (b) (member b SUPPORTED-CONTENT-ENCODINGS))  ;; FIXME: case-insensitive?
-              (format "member of ~a" SUPPORTED-CONTENT-ENCODINGS)))
+              (format "member of ~a" SUPPORTED-CONTENT-ENCODINGS)
+              #:party 'server))
       ;; FIXME: others?
       (void))
 
@@ -354,7 +357,7 @@
         ;; Reference: https://tools.ietf.org/html/rfc7230, Section 3.3.3 (Message Body Length)
         [(send headers has-value? 'transfer-encoding #"chunked") ;; Case 3
          (make-pump/chunked br decode-mode)]
-        [(send headers get-nat-value 'content-length) ;; Case 5
+        [(send headers get-integer-value 'content-length) ;; Case 5
          => (lambda (len)
               (cond [(and (< len CONTENT-LENGTH-READ-NOW) (eq? decode-mode #f))
                      (define content (b-read-bytes br len))
