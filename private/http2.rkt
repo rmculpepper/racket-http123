@@ -19,6 +19,8 @@
          file/gunzip)
 (provide (all-defined-out))
 
+(define-logger http2)
+
 ;; References:
 ;; - https://tools.ietf.org/html/rfc7540
 
@@ -95,14 +97,16 @@
     ;; ----------------------------------------
 
     (define/public (queue-frame fr)
-      (eprintf "--> ~a~e\n" (if closed? "DROPPING " "") fr)
+      (log-http2-debug "--> ~a~a" (if closed? "DROPPING " "")
+                       (parameterize ((error-print-width 60))
+                         (format "~e" fr)))
       (unless closed? (write-frame out fr)))
     (define/public (queue-frames frs)
       (for ([fr (in-list frs)]) (queue-frame fr)))
     (define/public (flush-frames) (flush-output out))
 
     (define/public (connection-error errorcode [comment ""] #:debug [debug #""])
-      (eprintf "!!! connection-error ~s, ~s\n" errorcode comment)
+      (log-http2-debug "connection-error ~s, ~s" errorcode comment)
       (queue-frame (frame type:GOAWAY 0 0 (fp:goaway last-server-streamid errorcode debug)))
       (flush-frames)
       (set-closed! 'by-error)
@@ -309,33 +313,36 @@
                                          ((error-display-handler) (exn-message e) e))])
                         (handle-frame fr)))))
       (define (streamsloop)
-        (define stream-evts
+        (define work-evts
           (for/list ([stream (in-hash-values stream-table)])
             (send stream get-work-evt)))
-        (eprintf ".   manager streamsloop (~s)\n" (length stream-evts))
-        (define streams-evt (apply choice-evt stream-evts))
+        (log-http2-debug "manager updating work evts (~s)" (length work-evts))
+        (define streams-evt (apply choice-evt work-evts))
         (let loop ()
-          (eprintf ".   manager loop\n")
+          (log-http2-debug "manager loop")
           (with-handlers ([(lambda (e) (eq? e 'escape-without-error)) void])
             (sync streams-evt
                   reader-evt
                   #;(wrap-evt (alarm-evt (+ (current-inexact-milliseconds) 10000.0))
-                              (lambda (ignored) (eprintf "   manager is bored!\n")))))
+                              (lambda (ignored) (log-http2-debug "manager is bored!")))))
           (flush-frames)
           (if (begin0 streams-changed? (set! streams-changed? #f))
               (streamsloop)
               (loop))))
-      (with-handlers ([(lambda (e) (eq? e 'connection-error)) void])
+      (with-handlers ([(lambda (e) (eq? e 'connection-error))
+                       (lambda (e) (log-http2-debug "manager stopped due to connection error"))])
         (streamsloop)))
 
     (define/private (reader)
       (cond [(eof-object? (peek-byte in))
-             (eprintf "<-- EOF\n")
+             (log-http2-debug "<-- EOF")
              (void)]
             [else
              (define fr (read-frame br))
              ;; FIXME: handle reading errors...
-             (eprintf "<-- ~e\n" fr)
+             (log-http2-debug "<-- ~a"
+                              (parameterize ((error-print-width 60))
+                                (format "~e" fr)))
              (thread-send manager-thread fr void)
              (reader)]))
 
@@ -653,7 +660,7 @@
     (define/public (set-s2-state! new-s2-state)
       (define old-s2-state s2-state)
       (set! s2-state new-s2-state)
-      (eprintf "#   new state = ~s\n" new-s2-state)
+      (log-http2-debug "#~a changed state -> ~a" streamid new-s2-state)
       (case old-s2-state
         [(before-request)        (teardown:before-request)]
         [(sending-request-data)  (teardown:sending-request-data)]
@@ -697,11 +704,10 @@
       (set! s2-work-evt never-evt))
 
     (define/public (setup:done)
-      (eprintf "... setting alarm\n")
       (set! s2-work-evt
             (handle-evt (alarm-evt (+ (current-inexact-milliseconds) KEEP-AFTER-CLOSE-MS))
                         (lambda (ignore)
-                          (eprintf "... removing closed stream (#~s)\n" streamid)
+                          (log-http2-debug "removing closed stream #~s" streamid)
                           (send conn remove-stream streamid)))))
 
     ;; ----------------------------------------
@@ -781,7 +787,7 @@
       (check-s2-state (if end? 'data+end 'data)))
 
     (define/public (s2:handle-headers headers end?)
-      (eprintf ".   putting headers in box\n")
+      (log-http2-debug "#~s returning headers to user" streamid)
       (box-evt-set! resp-header-bxe (lambda () headers))
       (check-s2-state (if end? 'headers+end 'headers)))
 
