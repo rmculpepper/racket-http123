@@ -205,8 +205,9 @@
             (check-stream-nonzero)
             (send (stream) handle-priority-payload payload)]
            [(== type:RST_STREAM)
+            (match-define (fp:rst_stream errorcode) payload)
             (check-stream-nonzero)
-            (send (stream) handle-rst_stream-payload flags payload)]
+            (send (stream) handle-rst_stream errorcode)]
            [(== type:SETTINGS)
             (check-stream-zero)
             (match-define (fp:settings settings) payload)
@@ -234,7 +235,7 @@
             (match-define (fp:goaway last-streamid errorcode debug) payload)
             ;; last-streamid is the last streamid that we initiated that the server acks
             (for ([(streamid stream) (in-hash stream-table)])
-              (send stream handle-goaway-payload payload))
+              (send stream handle-goaway last-streamid errorcode debug))
             (set-closed! 'by-goaway)]
            [(== type:WINDOW_UPDATE)
             (match-define (fp:window_update increment) payload)
@@ -576,13 +577,11 @@
       (check-state 'push_promise)
       (s2:handle-push_promise promised-streamid headers))
 
-    (define/public (handle-rst_stream-payload flags payload)
-      (match-define (fp:rst_stream errorcode) payload)
+    (define/public (handle-rst_stream errorcode)
       (check-state 'rst_stream)
       (s2:handle-rst_stream errorcode))
 
-    (define/public (handle-goaway-payload flags payload)
-      (match-define (fp:goaway last-streamid errorcode debug) payload)
+    (define/public (handle-goaway last-streamid errorcode debug)
       (check-state 'rst_stream) ;; pretend
       (s2:handle-goaway last-streamid errorcode debug))
 
@@ -794,6 +793,8 @@
       (set-s2-state! 'done))
 
     (define/public (s2:handle-goaway last-streamid errorcode debug)
+      ;; FIXME: If this streamid > last-streamid, then server has not processed
+      ;; this request, and it's okay to auto-retry on new connection.
       (set-s2-state! 'done))
 
     ;; ----------------------------------------
