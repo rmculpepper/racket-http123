@@ -12,8 +12,6 @@
 ;; References:
 ;; - HTTP/1.1: https://tools.ietf.org/html/rfc7230
 
-(define-rx TOKEN+ (rx TOKEN (* OWS "," OWS TOKEN)))
-
 ;; ============================================================
 ;; Header (Request)
 
@@ -47,6 +45,8 @@
 
 (define-rx HEADER-START (rx (record TOKEN) ":"))
 (define-rx HEADER (rx HEADER-START OWS (record FIELD-VALUE) OWS))
+
+(define-rx TOKEN+ (rx TOKEN (* OWS "," OWS TOKEN)))
 
 (define (split-on-commas bs)
   (regexp-split #rx#"[ \t]*,[ \t]*" bs))
