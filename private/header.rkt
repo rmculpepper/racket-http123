@@ -45,7 +45,7 @@
     [has-value?
      (->m header-key-symbol? bytes? boolean?)]
     [value-matches?
-     (->*m [header-key-symbol? regexp?] [#:exact? boolean?] boolean?)]
+     (->*m [header-key-symbol? byte-regexp?] [#:exact? boolean?] boolean?)]
     ))
 
 ;; ----------------------------------------
@@ -108,6 +108,9 @@
                 key (or description (object-name predicate)) v
                 #:code 'bad-header-value)))
 
+    (define/public (remove! key)
+      (hash-remove! headers key))
+
     ;; ----
 
     (define/public (custom-write out)
@@ -159,15 +162,15 @@
 
 ;; A HeaderEntry is (list Bytes Bytes) | (list Bytes Bytes 'never-add)
 
-;; make-headers-from-lists : (Listof HeaderEntry) -> headers%
+;; make-headers-from-entries : (Listof HeaderEntry) -> headers%
 ;; FIXME: preserve 'never-add ??
-(define (make-headers-from-lists raw-headers)
-  (make-headers-from-list raw-headers check-header-entry))
+(define (make-headers-from-entries entries)
+  (make-headers-from-list entries check-header-entry))
 
 ;; check-header-entry : Any -> (values HeaderKeyBytes HeaderValueBytes)
 (define (check-header-entry entry)
   (match entry
-    [(list* (? bytes? (and (regexp (rx^$ lower-TOKEN)) key))
+    [(list* (? bytes? (and (or (regexp (rx^$ lower-TOKEN)) #":status") key))
             (? bytes? (and (regexp (rx^$ FIELD-VALUE)) value))
             (? (lambda (v) (member v '((never-add) ())))))
      (values key value)]

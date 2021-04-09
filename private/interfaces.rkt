@@ -1,5 +1,6 @@
 #lang racket/base
-(require racket/class)
+(require racket/class
+         racket/match)
 (provide (all-defined-out))
 
 (define-logger http)
@@ -99,8 +100,31 @@
 (define (internal-error fmt . args)
   (apply error (http123-who) (string-append "internal error: " fmt) args))
 
-(define-syntax-rule (with-handle-all handler . body)
-  (with-handlers ([(lambda (e) #t) (handle e)]) . body))
+(define-syntax-rule (with-handler handler . body)
+  (with-handlers ([(lambda (e) #t) handler]) . body))
+
+(define (make-handler message-prefix base-info)
+  (lambda (e) (merge-exn base-info e)))
+
+(define (merge-exn e message-prefix base-info)
+  (define-values (msg cms info)
+    (match e
+      [(exn:fail:http123 msg cms info)
+       (values msg cms info)]
+      [(exn msg cms) (values msg cms #hasheq())]
+      [v (values (format "non-exception value raised: ~e" v) #f #hasheq())]))
+  (raise (exn:fail:http123 (if message-prefix
+                               (string-append message-prefix ";\n " msg)
+                               msg)
+                           (or cms (current-continuation-marks))
+                           (hash-set (merge-info base-info info)
+                                     'wrapped-exn e))))
+
+(define (merge-info base-info info)
+  (for/fold ([info info])
+            ([(k v) (in-hash base-info)]
+             #:when (and v (not (hash-has-key? info k))))
+    (hash-set info k v)))
 
 ;; ============================================================
 ;; Exceptions
@@ -113,7 +137,6 @@
 ;; - 'version  : 'http/1.1 | 'http/2    -- protocol version
 ;; - 'request  : Request                -- if regarding request
 ;; - 'received : 'no | 'unknown | 'yes  -- was request processed?
-;; - 'party    : 'server | 'user | 'user-agent  -- whose fault?
 ;; - 'code     : Symbol                 -- descriptive symbol
 ;; - 'where    : (listof Symbol)        -- entrypoint list
 ;; - 'wrapped-exn : Exn or Any          -- underlying exn
@@ -141,6 +164,17 @@
            (let ([h (if (car vs) (hash-set h (car ks) (car vs)) h)])
              (loop h (cdr ks) (cdr vs)))]
           [else h])))
+
+(define (h2-error #:party [party #f]
+                  #:code [code #f]
+                  #:received [received #f]
+                  #:wrapped-exn [wrapped-exn #f]
+                  #:info [base-info #hasheq()]
+                  #:who [who 'http123]
+                  fmt . args)
+  (apply h-error fmt args
+         #:party party #:code code #:received received #:wrapped-exn wrapped-exn
+         #:info base-info #:who who #:version 'http/2))
 
 
 ;; FIXME: Goal: should be clear to user whether request was sent and

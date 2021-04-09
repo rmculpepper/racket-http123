@@ -39,12 +39,12 @@
     ;; not deal with the structure of HTTP requests.
     ;; - flow windows
 
-    (define/private (connection-error errorcode [debug ""])
+    (define/private (connection-error errorcode [debug #""])
       (send conn connection-error errorcode debug))
 
-    (define/private (stream-error errorcode)
+    (define/private (stream-error errorcode #:raise [e #f])
       (queue-frame (frame type:RST_STREAM 0 streamid (fp:rst_stream errorcode)))
-      (set-s2-state! 'done))
+      (s2:error e))
 
     ;; ----------------------------------------
     ;; Flow windows
@@ -415,6 +415,10 @@
               resp-header-bxe
               user-in))
 
+    (define/private (send-exn-to-user e)
+      (box-evt-set! resp-header-bxe (lambda () (raise e)))
+      (raise-user-exn e))
+
     ;; ----------------------------------------
     ;; Handling frames from server
 
@@ -432,7 +436,10 @@
       (send conn handle-push_promise promised-streamid headers))
 
     (define/public (s2:handle-rst_stream errorcode)
-      ;; FIXME: send exn to user, unless already done
+      (send-exn-to-user
+       (exn:fail:http123 "stream closed by server"
+                         (current-continuation-marks)
+                         (hash-set* info-for-exn 'code 'RST_STREAM)))
       (set-s2-state! 'done))
 
     (define/public (s2:handle-goaway last-streamid errorcode debug)
@@ -440,8 +447,16 @@
       ;; this request, and it's okay to auto-retry on new connection.
       (when (> streamid last-streamid)
         (set! info-for-exn (hash-set info-for-exn 'received 'no)))
-      ;; FIXME: send exn to user, unless already done
+      (send-exn-to-user
+       (exn:fail:http123 "connection closed by server"
+                         (current-continuation-marks)
+                         (hash-set* info-for-exn 'code 'GOAWAY)))
       (set-s2-state! 'done))
+
+    (define/public (s2:error e)
+      (send-exn-to-user e)
+      (set-s2-state! 'done)
+      (raise 'stream-error))
 
     ;; ----------------------------------------
     ;; Sending request data from user

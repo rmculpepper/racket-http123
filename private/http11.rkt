@@ -129,7 +129,7 @@
         #:error-handler
         (make-binary-reader-error-handler
          #:error (lambda (br who fmt . args)
-                   (apply h-error fmt args #:code 'read #:party 'server))
+                   (apply h-error fmt args #:code 'read #:version 'http/1.1))
          #:show-data? (lambda (br who) #f))))
 
     (define/public (live?)
@@ -222,7 +222,7 @@
         (for ([rx (in-list reserved-headerline-rxs)])
           (when (regexp-match? rx header)
             (h-error "request contains header reserved for user-agent\n  header: ~e" header
-                     #:party 'user #:code 'reserved-request-header)))))
+                     #:code 'reserved-request-header)))))
 
     (define/private (url->host-bytes u)
       (send parent url->host-bytes u))
@@ -275,9 +275,7 @@
       (define method (request-method req))
       (define-values (status-line status-version status-code) (read-status-line))
       (define raw-headers (read-raw-headers))
-      (define headers
-        (parameterize ((h-error-info (hasheq 'party 'server)))
-          (make-headers-from-lines raw-headers)))
+      (define headers (make-headers-from-lines raw-headers))
       (define no-content? ;; RFC 7230 Section 3.3.3, cases 1 and 2
         (or (eq? method 'HEAD)
             (regexp-match? #rx"^1.." status-code) ;; Informational
@@ -312,7 +310,7 @@
         [(list _ http-version status-code reason-phrase)
          (values line http-version status-code)]
         [#f (h-error "expected status line from server\n  got: ~e" line
-                     #:party 'server #:code 'bad-status-line)]))
+                     #:version 'http/1.1 #:code 'bad-status-line)]))
 
     (define/public (read-raw-headers)
       (define next (b-read-bytes-line br HEADER-EOL-MODE))
@@ -320,19 +318,18 @@
             [else (cons next (read-raw-headers))]))
 
     (define/private (check-headers method no-content? headers)
-      (parameterize ((h-error-info (hasheq 'party 'server)))
-        (when (send headers has-key? 'content-length)
-          (send headers check-value 'content-length bytes->nat "nonnegative integer"))
-        (when (send headers has-key? 'transfer-encoding)
-          (send headers check-value 'transfer-encoding
-                (lambda (b) (equal? b #"chunked"))
-                (format "~s" #"chunked")))
-        (when (send headers has-key? 'content-encoding)
-          (send headers check-value 'content-encoding
-                (lambda (b) (member b SUPPORTED-CONTENT-ENCODINGS))  ;; FIXME: case-insensitive?
-                (format "member of ~a" SUPPORTED-CONTENT-ENCODINGS)))
-        ;; FIXME: others?
-        (void)))
+      (when (send headers has-key? 'content-length)
+        (send headers check-value 'content-length bytes->nat "nonnegative integer"))
+      (when (send headers has-key? 'transfer-encoding)
+        (send headers check-value 'transfer-encoding
+              (lambda (b) (equal? b #"chunked"))
+              (format "~s" #"chunked")))
+      (when (send headers has-key? 'content-encoding)
+        (send headers check-value 'content-encoding
+              (lambda (b) (member b SUPPORTED-CONTENT-ENCODINGS))  ;; FIXME: case-insensitive?
+              (format "member of ~a" SUPPORTED-CONTENT-ENCODINGS)))
+      ;; FIXME: others?
+      (void))
 
     ;; make-content-pump : Headers -> (values Content (-> Void))
     ;; The pump procedure can raise an exception (for example, to signal the

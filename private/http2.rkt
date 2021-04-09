@@ -180,20 +180,28 @@
             [else (handle-frame* fr)]))
 
     (define/public (handle-multipart-frames frs)
-      (define rest-headerbfs
-        (for/list ([fr (in-list (cdr frs))])
-          (fp:continuation-headerbf (frame-payload fr))))
+      (define (get-headers streamid first-headerbf)
+        (define rest-headerbfs
+          (for/list ([fr (in-list (cdr frs))])
+            (fp:continuation-headerbf (frame-payload fr))))
+        (define headerb (apply bytes-append first-headerbf rest-headerbfs))
+        (with-handlers ([exn? (lambda (e)
+                                (connection-error
+                                 error:COMPRESSION_ERROR
+                                 #:streamid streamid
+                                 #:raise (merge-exn e "error decoding headers"
+                                                    (hasheq 'code 'malformed-headers
+                                                            'received 'yes))))])
+          (decode-headers headerb reading-dt)))
       (match (car frs)
         [(frame (== type:HEADERS) flags streamid
                 (fp:headers padlen streamdep weight headerbf))
-         (define headerbf* (apply bytes-append headerbf rest-headerbfs))
-         (define headers (decode-headers headerbf* reading-dt))
+         (define headers (get-headers streamid headerbf))
          (send (get-stream streamid) handle-headers-payload
                flags (fp:headers padlen streamdep weight headers))]
         [(frame (== type:PUSH_PROMISE) flags streamid
                 (fp:push_promise padlen promised-streamid headerbf))
-         (define headerbf* (apply bytes-append headerbf rest-headerbfs))
-         (define headers (decode-headers headerbf* reading-dt))
+         (define headers (get-headers streamid headerbf))
          (send (get-stream streamid) handle-push_promise-payload
                flags (fp:push_promise padlen promised-streamid headers))]))
 
@@ -329,7 +337,8 @@
         (define streams-evt (apply choice-evt work-evts))
         (let loop ()
           (log-http2-debug "manager loop")
-          (with-handlers ([(lambda (e) (eq? e 'escape-without-error)) void])
+          (with-handlers ([(lambda (e) (eq? e 'escape-without-error)) void]
+                          [(lambda (e) (eq? e 'stream-error)) void])
             (sync streams-evt
                   reader-evt
                   #;(wrap-evt (alarm-evt (+ (current-inexact-milliseconds) 10000.0))
@@ -365,8 +374,8 @@
     (define/public (open-request req ccontrol)
       (unless (eq? ccontrol #f)
         ;; FIXME: support 'close, make 'upgrade a separate method
-        (h-error "connection control not supported\n  control: ~e" ccontrol
-                 #:party 'user #:version 'http/2 #:received 'no))
+        (h2-error "connection control not supported\n  control: ~e" ccontrol
+                  #:received 'no))
       (define stream (new-client-stream req #t))
       ;; Stream automatically sends request headers.
       (define-values (user-out resp-headers-bxe user-in)
@@ -384,18 +393,25 @@
       ;; Get response header. (Note: may receive raised-exception instead!)
       (handle-evt
        resp-headers-bxe
-       (lambda (resp-headers)
-         ;; FIXME: add alternative: if resp-headers is (cons 'retry ...moreinfo...)
-         ;;   then http2 is automatically retrying in new connection
+       (lambda (header-entries)
+         (define headers
+           (with-handler (lambda (e) (h2-error "error processing headers"
+                                               #:received 'yes
+                                               #:wrapped-exn e))
+             (make-headers-from-entries header-entries)))
+         (unless (send headers value-matches? ':status #px#"[0-9]{3}")
+           (h2-error "bad or missing status from server"
+                     #:received 'yes #:code 'bad-status #:headers headers))
+         (define status (send headers get-value ':status))
+         (send headers remove! ':status)
          ;; ----
-         (define code (cond [(assoc #":status" resp-headers) => cdr] [else #f]))
          (define decode-mode
-           (cond [(member (list #"content-encoding" #"gzip") resp-headers) 'gzip]
-                 [(member (list #"content-encoding" #"deflate") resp-headers) 'deflate]
+           (cond [(send headers has-value? 'content-encoding #"gzip") 'gzip]
+                 [(send headers has-value? 'content-encoding #"deflate") 'deflate]
                  [else #f]))
          (define decoded-in (make-decode-input-wrapper decode-mode user-in))
          ;; FIXME
-         (list (make-headers-from-lists resp-headers) decoded-in))))
+         (list status headers decoded-in))))
 
     ;; ========================================
 
