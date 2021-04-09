@@ -20,7 +20,12 @@
 (define (connect host port ssl)
   (new http-connection% (host host) (port port) (ssl ssl)))
 
-;; FIXME: make this thread-safe
+
+;; FIXME: need way of restricting versions to allow eg for tunneling
+;; (only http/1.1), eg websockets
+;; - NO, makes more sense for tunneling to require creating a fresh
+;;   http/1.1 connection specifically for the tunnel
+;; - but restricting version is good for testing
 
 (define http-connection%
   (class* object% (#; http-connection<%>)
@@ -32,17 +37,22 @@
     (define/public (get-host) host)
     (define/public (get-port) port)
 
+    (define lock (make-semaphore 1))
+    (define-syntax-rule (with-lock e ...)
+      (begin (semaphore-wait lock) (begin0 (let () e ...) (semaphore-post lock))))
+
     ;; FIXME: need marker for connections that always error (eg, not an HTTP server)
     (define conn #f)
 
     (define/public (get-actual-connection [connect? #t])
-      (cond [(and conn (send conn live?))
-             conn]
-            [connect?
-             (let ([c (open-actual-connection)]) (set! conn c) c)]
-            [else #f]))
+      (with-lock
+        (cond [(and conn (send c live?))
+               conn]
+              [connect?
+               (let ([c (open-actual-connection)]) (set! conn c) c)]
+              [else #f])))
 
-    (define/public (open-actual-connection)
+    (define/private (open-actual-connection)
       (cond [ssl
              (define-values (in out)
                (ssl-connect host port ssl #:alpn '(#"h2" #"http/1.1")))
@@ -62,10 +72,11 @@
            (in in) (out out)))
 
     (define/public (close)
-      (when conn
-        (define c conn)
-        (send c abandon)
-        (set! conn #f)))
+      (with-lock
+        (when conn
+          (define c conn)
+          (send c abandon)
+          (set! conn #f))))
 
     ;; ----------------------------------------
 
@@ -86,12 +97,12 @@
     ;; async-request : Request CControl -> Evt[Response]
     (define/public (async-request req ccontrol)
       (define TRIES 2)
-      (let loop ([tries TRIES])
-        (when (zero? tries)
-          (error* "failed to send request (too many attempts)"))
+      (let loop ([attempts 0])
+        (unless (< attempts TRIES)
+          (error* "failed to send request (after ~s attempts)" attempts))
         (define ac (get-actual-connection))
         (cond [(send ac open-request req ccontrol) => values]
-              [else (begin (send ac abandon) (loop (sub1 tries)))])))
+              [else (begin (send ac abandon) (loop (add1 tries)))])))
 
     ))
 

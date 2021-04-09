@@ -160,44 +160,22 @@
     (define/private (end-sending)
       (semaphore-post sending-lock))
 
-    #|
-    ;; send-request : Request ConnectionControl BoxEvt -> Boolean
-    ;; Returns #t if request sent and queued, #f if cannot send in current state.
-    (define/public (send-request req ccontrol resp-bxe)
-      (check-req-headers (request-headers req))
-      (start-sending)
-      (define can-proceed?
-        (and (eq? state 'open) (not send-in-progress?)))
-      (cond [can-proceed?
-             (define rqe (sending req ccontrol resp-bxe))
-             (set! send-in-progress? #t)
-             (-send-request req ccontrol)
-             (enqueue rqe)
-             (set! send-in-progress? #f)
-             (end-sending)
-             #t]
-            [else
-             (end-sending)
-             #f]))
-    |#
-
     ;; open-request : Request ConnectionControl -> BoxEvt or #f
     ;; Returns evt if request sent and queued, #f if cannot send in current state.
     (define/public (open-request req ccontrol)
       (check-req-headers (request-headers req))
       (start-sending)
-      (define can-proceed?
-        (and (eq? state 'open) (not send-in-progress?)))
       (cond [(and (eq? state 'open) (not send-in-progress?))
              (define resp-bxe (make-box-evt #t))
-             (define rqe (sending req ccontrol resp-bxe))
              (set! send-in-progress? #t)
              (-send-request req ccontrol)
-             (enqueue rqe)
+             (enqueue (sending req ccontrol resp-bxe))
              (set! send-in-progress? #f)
              (end-sending)
              resp-bxe]
-            [else #f]))
+            [else
+             (end-sending)
+             #f]))
 
     (define/private (-send-request req ccontrol)
       (match-define (request method u headers data) req)
