@@ -16,24 +16,9 @@
 
 ;; ----------------------------------------
 
-;; A NormalizedHeader is one of
-;; - (list Bytes Bytes)
-;; - (list Bytes Bytes 'never-add)
+;; HeaderEntry = (list Bytes Bytes) | (list Bytes Bytes 'never-add)
 
-;; A FlexibleHeader is one of
-;; - Bytes
-;; - (list FlexibleKey FlexibleValue)
-;; - (list FlexibleKey FlexibleValue 'never-add)
-
-;; A FlexibleKey is one of
-;; - Symbol
-;; - Bytes      -- normalize ???
-
-;; A FlexibleValue is one of
-;; - Bytes          -- normal header or unsplit list-valued header
-;; - (Listof Bytes) -- list-valued header
-
-;; encode-headers : (Listof FlexibleHeader) State -> Void
+;; encode-headers : (Listof HeaderEntry) State -> Void
 (define (encode-headers headers dt #:who [who 'encode-headers]
                         #:huffman? [huffman? #t]
                         #:overrides [overrides #hash()])
@@ -50,25 +35,23 @@
 (define (encode-header who header dt overrides)
   (match header
     [(list key value 'never-add)
-     (define key* (header-key->bytes key))
-     (header:literal 'never-add key* value)]
+     (header:literal 'never-add key value)]
     [(list key value)
-     (define key* (header-key->bytes key))
-     (define key-index (or (hash-ref key-table key* #f)
-                           (dtable-find-key dt key* (dtable-adjustment))))
-     (cond [(hash-ref key+value-table (list key* value) #f)
+     (define key-index (or (hash-ref key-table key #f)
+                           (dtable-find-key dt key (dtable-adjustment))))
+     (cond [(hash-ref key+value-table (list key value) #f)
             => (lambda (index) (header:indexed index))]
-           [(dtable-find dt (list key* value) (dtable-adjustment))
+           [(dtable-find dt (list key value) (dtable-adjustment))
             => (lambda (index) (header:indexed index))]
            [else
-            (case (key-index-mode overrides key*)
+            (case (key-index-mode overrides key)
               [(yes)
-               (dtable-add! dt (list key* value))
-               (header:literal 'add (or key-index key*) value)]
+               (dtable-add! dt (list key value))
+               (header:literal 'add (or key-index key) value)]
               [(never)
-               (header:literal 'never-add (or key-index key*) value)]
+               (header:literal 'never-add (or key-index key) value)]
               [else
-               (header:literal 'no-add (or key-index key*) value)])])]))
+               (header:literal 'no-add (or key-index key) value)])])]))
 
 ;; decode-headers : Bytes DTable -> (Listof NormalizedHeader)
 (define (decode-headers bs dt)
@@ -101,11 +84,13 @@
 
 ;; References:
 ;; - https://github.com/nghttp2/nghttp2/blob/master/lib/nghttp2_hd.c
-;;   NEVER for Authorization (all), Cookie (w/ length < 20) because
-;;     they might contain low-entropy secrets
-;;   NO to :path, Age, Content-Length, ETag, If-Modified-Since, If-None-Match,
-;;     Location, Set-Cookie
+;;   Their policy:
+;;     NEVER for Authorization (all), Cookie (w/ length < 20) because
+;;       they might contain low-entropy secrets
+;;     NO to :path, Age, Content-Length, ETag, If-Modified-Since, If-None-Match,
+;;       Location, Set-Cookie
 
+;; Default policy:
 ;; Default to indexing Authorization and Cookie. Maybe override if
 ;; client expects to use low-entropy secrets.
 

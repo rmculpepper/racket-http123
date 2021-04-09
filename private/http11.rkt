@@ -187,7 +187,7 @@
         (fprintf out "Host: ~a\r\n" (url->host-bytes u))
         (fprintf out "Accept-Encoding: ~a\r\n"
                  (bytes-join SUPPORTED-CONTENT-ENCODINGS #","))
-        (when (headerset-missing? headers #rx"^(?i:User-Agent:)")
+        (when (headerlines-missing? headers #rx"^(?i:User-Agent:)")
           (fprintf out "User-Agent: ~a\r\n" default-user-agent))
         (cond [(procedure? data)
                (fprintf out "Transfer-Encoding: chunked\r\n")]
@@ -218,14 +218,8 @@
       (when (eq? ccontrol 'close) (abandon-out)))
 
     (define/private (check-req-headers headers)
-      (define reserved-header-rxs
-        '(#rx"^(?i:Host):"
-          #rx"^(?i:Accept-Encoding):" ;; In principle, this belongs to a separate layer...
-          #rx"^(?i:Content-Length):"
-          #rx"^(?i:Connection|Keep-Alive|Upgrade):"
-          #rx"^(?i:Transfer-Encoding|TE|Trailer):"))
       (for ([header (in-list headers)])
-        (for ([rx (in-list reserved-header-rxs)])
+        (for ([rx (in-list reserved-headerline-rxs)])
           (when (regexp-match? rx header)
             (h-error "request contains header reserved for user-agent\n  header: ~e" header
                      #:party 'user #:code 'reserved-request-header)))))
