@@ -3,6 +3,11 @@
 (provide (all-defined-out))
 
 (define-logger http)
+(define-logger http1)
+(define-logger http2)
+
+(define default-user-agent
+  (format "Racket/~a (http123)" (version)))
 
 ;; ============================================================
 ;; Interfaces

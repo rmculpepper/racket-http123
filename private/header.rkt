@@ -290,12 +290,12 @@
             [else #f]))
 
     (define/public (get-ascii-string key)
-      (define v (get-value key #f))
+      (define v (get-value key))
       (and v (regexp-match? #px#"^[[:ascii:]]*$" v) (bytes->string/latin-1 v)))
 
     (define/public (get-integer-value key) ;; -> Int or #f
       (define v (get-ascii-string key))
-      (and v (let ([n (string->number v)]) (and (exact-integer? n)))))
+      (and v (let ([n (string->number v)]) (and (exact-integer? n) n))))
 
     (define/public (has-value? key value)
       (equal? (get-value key) value))

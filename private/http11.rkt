@@ -13,6 +13,7 @@
          "regexp.rkt"
          "io.rkt"
          "request.rkt"
+         "decode.rkt"
          file/gunzip)
 (provide (all-defined-out))
 
@@ -66,26 +67,17 @@
 
     (define/public (async-request req ccontrol)
       (define TRIES 2)
-      (define bxe (make-box-evt #t))
       (let loop ([tries TRIES])
         (when (zero? tries)
           (error* "failed to send request (too many attempts)"))
         (define ac (get-actual-connection))
-        (cond [(send ac send-request req ccontrol bxe) (void)]
-              [else (begin (send ac abandon) (loop (sub1 tries)))]))
-      bxe)
+        (cond [(send ac open-request req ccontrol) => values]
+              [else (begin (send ac abandon) (loop (sub1 tries)))])))
 
     ))
 
-(define default-user-agent
-  (format "Racket/~a (http123)" (version)))
-
-(define PIPE-SIZE 4096)
-
 (define STATUS-EOL-MODE 'return-linefeed)
 (define HEADER-EOL-MODE 'return-linefeed)
-(define CHUNKED-EOL-MODE 'return-linefeed)
-(define CONTENT-LENGTH-READ-NOW (expt 2 20)) ;; FIXME
 
 (define SUPPORTED-CONTENT-ENCODINGS '(#"gzip" #"deflate"))
 
@@ -100,7 +92,10 @@
 ;; Not thread-safe: expects at most one sending thread, one reading thread.
 (define http11-actual-connection%
   (class* object% (#; http-connection<%>)
-    (init-field parent in out)
+    (init-field parent in out [try-upgrade? #t])
+
+    ;; FIXME: implement try-upgrade?
+
     (super-new)
 
     ;; ============================================================
@@ -165,6 +160,7 @@
     (define/private (end-sending)
       (semaphore-post sending-lock))
 
+    #|
     ;; send-request : Request ConnectionControl BoxEvt -> Boolean
     ;; Returns #t if request sent and queued, #f if cannot send in current state.
     (define/public (send-request req ccontrol resp-bxe)
@@ -183,6 +179,25 @@
             [else
              (end-sending)
              #f]))
+    |#
+
+    ;; open-request : Request ConnectionControl -> BoxEvt or #f
+    ;; Returns evt if request sent and queued, #f if cannot send in current state.
+    (define/public (open-request req ccontrol)
+      (check-req-headers (request-headers req))
+      (start-sending)
+      (define can-proceed?
+        (and (eq? state 'open) (not send-in-progress?)))
+      (cond [(and (eq? state 'open) (not send-in-progress?))
+             (define resp-bxe (make-box-evt #t))
+             (define rqe (sending req ccontrol resp-bxe))
+             (set! send-in-progress? #t)
+             (-send-request req ccontrol)
+             (enqueue rqe)
+             (set! send-in-progress? #f)
+             (end-sending)
+             resp-bxe]
+            [else #f]))
 
     (define/private (-send-request req ccontrol)
       (match-define (request method u headers data) req)
@@ -288,7 +303,9 @@
       (define method (request-method req))
       (define-values (status-line status-version status-code) (read-status-line))
       (define raw-headers (read-raw-headers))
-      (define headers (make-headers-from-lines raw-headers #:party 'server))
+      (define headers
+        (parameterize ((h-error-info (hasheq 'party 'server)))
+          (make-headers-from-lines raw-headers)))
       (define no-content? ;; RFC 7230 Section 3.3.3, cases 1 and 2
         (or (eq? method 'HEAD)
             (regexp-match? #rx"^1.." status-code) ;; Informational
@@ -331,21 +348,19 @@
             [else (cons next (read-raw-headers))]))
 
     (define/private (check-headers method no-content? headers)
-      (when (send headers has-key? 'content-length)
-        (send headers check-value 'content-length bytes->nat "nonnegative integer"
-              #:party 'server))
-      (when (send headers has-key? 'transfer-encoding)
-        (send headers check-value 'transfer-encoding
-              (lambda (b) (equal? b #"chunked"))
-              (format "~s" #"chunked")
-              #:party 'server))
-      (when (send headers has-key? 'content-encoding)
-        (send headers check-value 'content-encoding
-              (lambda (b) (member b SUPPORTED-CONTENT-ENCODINGS))  ;; FIXME: case-insensitive?
-              (format "member of ~a" SUPPORTED-CONTENT-ENCODINGS)
-              #:party 'server))
-      ;; FIXME: others?
-      (void))
+      (parameterize ((h-error-info (hasheq 'party 'server)))
+        (when (send headers has-key? 'content-length)
+          (send headers check-value 'content-length bytes->nat "nonnegative integer"))
+        (when (send headers has-key? 'transfer-encoding)
+          (send headers check-value 'transfer-encoding
+                (lambda (b) (equal? b #"chunked"))
+                (format "~s" #"chunked")))
+        (when (send headers has-key? 'content-encoding)
+          (send headers check-value 'content-encoding
+                (lambda (b) (member b SUPPORTED-CONTENT-ENCODINGS))  ;; FIXME: case-insensitive?
+                (format "member of ~a" SUPPORTED-CONTENT-ENCODINGS)))
+        ;; FIXME: others?
+        (void)))
 
     ;; make-content-pump : Headers -> (values Content (-> Void))
     ;; The pump procedure can raise an exception (for example, to signal the
@@ -370,88 +385,6 @@
 
     ))
 
-(define (get-decode-mode headers)
-  (cond [(send headers has-value? 'content-encoding #"gzip") 'gzip]
-        [(send headers has-value? 'content-encoding #"deflate") 'deflate]
-        [else #f]))
-
-(define (make-decode-wrapper decode-mode out-to-user raise-user-exn)
-  (cond [(memq decode-mode '(gzip deflate))
-         (define-values (decode-in out-to-decode raise-decode-exn) (make-wrapped-pipe))
-         (thread (lambda ()
-                   (with-handlers ([exn? (lambda (e) (raise-user-exn e) (raise e))])
-                     (case decode-mode
-                       [(gzip) (gunzip-through-ports decode-in out-to-user)]
-                       [(deflate) (inflate decode-in out-to-user)])
-                     (close-output-port out-to-user))))
-         (values out-to-decode raise-decode-exn)]
-        [else (values out-to-user raise-user-exn)]))
-
-(define (make-decode-input-wrapper decode-mode decode-in)
-  (cond [(memq decode-mode '(gzip deflate))
-         (define-values (user-in out-to-user raise-user-exn) (make-wrapped-pipe))
-         (thread (lambda ()
-                   (with-handlers ([exn? (lambda (e) (raise-user-exn e))])
-                     (case decode-mode
-                       [(gzip) (gunzip-through-ports decode-in out-to-user)]
-                       [(deflate) (inflate decode-in out-to-user)]))
-                   (close-output-port out-to-user)))
-         user-in]
-        [else decode-in]))
-
-(define (make-pump decode-mode proc)
-  (define-values (wrapped-user-in out-to-user raise-user-exn) (make-wrapped-pipe))
-  (define-values (out-to-decode raise-decode-exn)
-    (make-decode-wrapper decode-mode out-to-user raise-user-exn))
-  (values wrapped-user-in
-          (lambda ()
-            (with-handlers ([exn? (lambda (e) (raise-decode-exn e) (raise e))])
-              (proc out-to-decode)))))
-
-(define (make-pump/content-length br len decode-mode)
-  (define (forward/content-length out-to-decode)
-    (write-bytes (b-read-bytes br len) out-to-decode)
-    (close-output-port out-to-decode))
-  (make-pump decode-mode forward/content-length))
-
-(define (make-pump/until-eof in decode-mode)
-  (define (forward/until-eof out-to-decode)
-    (let loop ()
-      (define next (read-bytes PIPE-SIZE in))
-      (cond [(eof-object? next)
-             (close-input-port in)
-             (close-output-port out-to-decode)]
-            [else (begin (write-bytes next out-to-decode) (loop))])))
-  (make-pump decode-mode forward/until-eof))
-
-(define (make-pump/chunked br decode-mode)
-  (define (forward/chunked out-to-decode)
-    (define (read-chunk-size)
-      (define line (b-read-bytes-line br CHUNKED-EOL-MODE))
-      (match (regexp-match #rx"^([0-9a-fA-F]+)(?:$|;)" line) ;; ignore chunk-ext
-        [(list _ size-bs) (string->number (bytes->string/latin-1 size-bs) 16)]
-        [#f (h-error "expected valid chunk size from server\n  got: ~e" line
-                     #:party 'server #:code 'bad-chunked-transfer)]))
-    (define (expect-crlf)
-      (let ([crlf (b-read-bytes br 2)])
-        (unless (equal? crlf #"\r\n")
-          (h-error "expected CRLF after chunk\n  received: ~e" crlf
-                   #:party 'server #:code 'bad-chunked-transfer))))
-    (define (read/discard-trailer)
-      (define line (b-read-bytes-line br CHUNKED-EOL-MODE))
-      (unless (equal? line #"") (read/discard-trailer)))
-    (let loop ()
-      (define chunk-size (read-chunk-size))
-      (cond [(zero? chunk-size)
-             (read/discard-trailer)
-             (close-output-port out-to-decode)]
-            [else
-             (define chunk-data (b-read-bytes br chunk-size))
-             (write-bytes chunk-data out-to-decode)
-             (expect-crlf)
-             (loop)])))
-  (make-pump decode-mode forward/chunked))
-
 ;; ------------------------------------------------------------
 
 (define http11-response%
@@ -464,7 +397,7 @@
                 content)        ;; Bytes or InputPort
     (super-new)
 
-    (define/public (get-req) req)
+    (define/public (get-request) req)
     (define/public (get-ccontrol) ccontrol)
     (define/public (get-status-version) status-version)
     (define/public (get-status-code) status-code)
@@ -476,6 +409,7 @@
 
 ;; ------------------------------------------------------------
 
+;; FIXME: remove fragment, etc
 (define (url->bytes u)
   ;; FIXME: UTF-8 ???
   (string->bytes/utf-8 (url->string u)))
