@@ -255,8 +255,7 @@
 
 (define headers%
   (class* object% (headers<%> printable<%>)
-    (init-field [headers (make-hasheq)] ;; Hasheq[Symbol => (U Bytes (Listof Bytes))]
-                [party #f])
+    (init-field [headers (make-hasheq)]) ;; Hasheq[Symbol => (U Bytes (Listof Bytes))]
     (super-new)
 
     (define/public (get-headers) headers)
@@ -308,9 +307,9 @@
     (define/public (check-value key predicate [description #f])
       (define v (get-value key))
       (unless (predicate v)
-        (http-error "bad header value\n  header: ~e\n  expected: ~a\n  got: ~e"
-                    key (or description (object-name predicate)) v
-                    #:party party #:code 'bad-header-value)))
+        (error* "bad header value\n  header: ~e\n  expected: ~a\n  got: ~e"
+                key (or description (object-name predicate)) v
+                #:code 'bad-header-value)))
 
     ;; ----
 
@@ -329,14 +328,14 @@
 
 ;; ------------------------------------------------------------
 
-(define (make-headers-from-list raw-headers get-kv #:party [party #f])
+(define (make-headers-from-list raw-headers get-kv)
   (define headers (make-hasheq))
   (define list-valued (make-hasheq))
   (for ([raw-header (in-list raw-headers)])
     (define-values (key-bs val-bs) (get-kv raw-header))
     (define key (or (header-key->symbol key-bs #t)
-                    (http-error "bad header key\n  key: ~e" key-bs
-                                #:who 'make-headers-from-list #:party party)))
+                    (error* "bad header key\n  key: ~e" key-bs
+                            #:who 'make-headers-from-list #:code 'bad-header-key)))
     (cond [(hash-ref headers key #f)
            => (lambda (old-v)
                 (define old-v* (if (bytes? old-v) (list old-v) old-v))
@@ -346,18 +345,17 @@
           [else (hash-set! headers key val-bs)]))
   (for ([k (in-hash-keys list-valued)])
     (hash-set! headers k (reverse (hash-ref headers k))))
-  (new headers% (headers headers) (party party)))
+  (new headers% (headers headers)))
 
 ;; make-headers-from-lines : (Listof Bytes) -> headers%
-(define (make-headers-from-lines raw-headers #:party [party #f])
+(define (make-headers-from-lines raw-headers)
   (make-headers-from-list
    raw-headers
    (lambda (raw-header)
      (match (regexp-match (rx^$ HEADER) raw-header)
        [(list _ key-bs val-bs) (values key-bs val-bs)]
-       [_ (http-error "malformed header line\n  line: ~e" raw-header
-                      #:who 'make-headers-from-lines #:code 'bad-header-line
-                      #:party party)]))))
+       [_ (error* "malformed header line\n  line: ~e" raw-header
+                  #:who 'make-headers-from-lines #:code 'bad-header-line)]))))
 
-(define (make-headers-from-lists raw-headers #:party [party #f])
+(define (make-headers-from-lists raw-headers)
   (make-headers-from-list raw-headers (lambda (e) (values (car e) (cadr e)))))

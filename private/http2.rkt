@@ -109,6 +109,7 @@
       (log-http2-debug "connection-error ~s, ~s" errorcode comment)
       (queue-frame (frame type:GOAWAY 0 0 (fp:goaway last-server-streamid errorcode debug)))
       (flush-frames)
+      ;; FIXME: notify all streams
       (set-closed! 'by-error)
       (when #t
         (let ([fake-exn (exn:fail (format "connection error: ~s, ~s" errorcode comment)
@@ -411,8 +412,8 @@
 
 (define http2-stream%
   (class* object% ()
-    (init-field conn streamid
-                req send-req?)
+    (init-field conn streamid)
+    (init req send-req?)
     (super-new)
 
     (define/public (client-originated?) (odd? streamid))
@@ -711,6 +712,7 @@
     (define/public (teardown:before-response) (void))
 
     (define/public (setup:reading-response-data)
+      (set! info-for-exn (hash-set info-for-exn 'received 'yes))
       (set! s2-work-evt
             (handle-evt (guard-evt (lambda () user-in-last-progress-evt))
                         (lambda (ignored) (update-target-in-flow-window)))))
@@ -728,7 +730,7 @@
     ;; ----------------------------------------
     ;; Initiate request
 
-    (define/private (initiate-request)
+    (define/private (initiate-request req send-req?)
       (cond [send-req?
              (match-define (request method url headers data) req)
              (log-http2-debug "#~s initiating ~s request" streamid method)
@@ -779,6 +781,12 @@
       ;; having to rescan all streams / etc.
       (guard-evt (lambda () s2-work-evt)))
 
+    (define info-for-exn
+      (hasheq 'version 'http/2
+              'request req
+              'streamid streamid
+              'received 'unknown))
+
     ;; Stage 1. Sending request data
     (define-values (in-from-user user-out) (make-pipe))
     ;; Stage 2. Receive response header
@@ -812,11 +820,15 @@
       (send conn handle-push_promise promised-streamid headers))
 
     (define/public (s2:handle-rst_stream errorcode)
+      ;; FIXME: send exn to user, unless already done
       (set-s2-state! 'done))
 
     (define/public (s2:handle-goaway last-streamid errorcode debug)
-      ;; FIXME: If this streamid > last-streamid, then server has not processed
+      ;; If this streamid > last-streamid, then server has not processed
       ;; this request, and it's okay to auto-retry on new connection.
+      (when (> streamid last-streamid)
+        (set! info-for-exn (hash-set info-for-exn 'received 'no)))
+      ;; FIXME: send exn to user, unless already done
       (set-s2-state! 'done))
 
     ;; ----------------------------------------
@@ -873,5 +885,5 @@
       delta)
 
     ;; ============================================================
-    (initiate-request)
+    (initiate-request req send-req?)
     ))

@@ -72,40 +72,75 @@
 (define-syntax-rule (with-entry-point who body ...)
   (with-continuation-mark who-mark who (begin0 (let () body ...))))
 
-(define (http123-entry-points) ;; reversed, ie earliest->latest
+(define (get-entry-points) ;; reversed, ie earliest->latest
   (define entry-points
     (continuation-mark-set->list (current-continuation-marks) who-mark))
   (if (pair? entry-points) (reverse entry-points) '(http123)))
 
 (define (http123-who)
-  (car (http123-entry-points)))
+  (car (get-entry-points)))
 
-(define (error* fmt . args)
-  (apply error (http123-who) fmt args))
+(define h-error-info (make-parameter #hasheq()))
+
+(define (error* #:who [who #f]
+                #:code [code #f]
+                fmt . args)
+  (define info (h-error-info))
+  (cond [(not (hash-empty? info))
+         => (lambda (info)
+              (apply h-error #:who who #:code code #:info info fmt args))]
+        [else (apply error (or (http123-who) who 'http123) fmt args)]))
 
 (define (internal-error fmt . args)
   (apply error (http123-who) (string-append "internal error: " fmt) args))
 
+(define-syntax-rule (with-handle-all handler . body)
+  (with-handlers ([(lambda (e) #t) (handle e)]) . body))
+
 ;; ============================================================
 ;; Exceptions
 
-;; exn:fail:http123 indicates an error that occurred
-;; where party : #f or 'server or 'client
-;;       code  : Symbol or #f
-;;       info  : (Listof (cons Symbol Any))
-(struct exn:fail:http123 exn:fail (party code info))
-(struct exn:fail:http123:client exn:fail:http123 ())
-(struct exn:fail:http123:server exn:fail:http123 ())
+;; Use exn:fail:http123 only for HTTP-related errors.
+;; Eg, don't use for malformed header key (but maybe catch and wrap
+;; with "during header processing" http123 exn).
 
-(define (http-error #:who [who #f] #:party [party #f] #:code [code #f] #:info [info null]
-                    fmt . args)
+;; info : Hash[Symbol => Any], with the following common keys:
+;; - 'version  : 'http/1.1 | 'http/2    -- protocol version
+;; - 'request  : Request                -- if regarding request
+;; - 'received : 'no | 'unknown | 'yes  -- was request processed?
+;; - 'party    : 'server | 'user | 'user-agent  -- whose fault?
+;; - 'code     : Symbol                 -- descriptive symbol
+;; - 'where    : (listof Symbol)        -- entrypoint list
+;; - 'wrapped-exn : Exn or Any          -- underlying exn
+(struct exn:fail:http123 exn:fail (info))
+
+(define (h-error #:party [party #f]
+                 #:code [code #f]
+                 #:received [received #f]
+                 #:wrapped-exn [wrapped-exn #f]
+                 #:version [version #f]
+                 #:info [base-info #hasheq()]
+                 #:who [who 'http123]
+                 fmt . args)
   (let/ec k
     (raise (exn:fail:http123
             (format "~a: ~a" (or (http123-who) who) (apply format fmt args))
             (continuation-marks k)
-            party code info))))
+            (hash-set** base-info
+                        '(party code received wrapped-exn version who)
+                        (list party code received wrapped-exn version who))))))
 
-(define (c-error #:who [who #f] #:code [code #f] #:info [info null] fmt . args)
-  (apply http-error #:who who #:party 'client #:info info fmt args))
-(define (s-error #:who [who #f] #:code [code #f] #:info [info null] fmt . args)
-  (apply http-error #:who who #:party 'server #:info info fmt args))
+(define (hash-set** h ks vs)
+  (let loop ([h h] [ks ks] [vs vs])
+    (cond [(pair? ks)
+           (let ([h (if (car vs) (hash-set h (car ks) (car vs)) h)])
+             (loop h (cdr ks) (cdr vs)))]
+          [else h])))
+
+
+;; FIXME: Goal: should be clear to user whether request was sent and
+;; received (as much as we can know, anyway)
+;; - If not exn:fail:http123 (eg, exn:fail:contract, plain exn:fail),
+;;   then request was not sent.
+;; - If http:fail:http123, then consult 'received field.
+;;   That may require catching underlying exn; if so, add as info 'underlying-exn.

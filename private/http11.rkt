@@ -134,7 +134,7 @@
         #:error-handler
         (make-binary-reader-error-handler
          #:error (lambda (br who fmt . args)
-                   (apply s-error fmt args #:code 'read))
+                   (apply h-error fmt args #:code 'read #:party 'server))
          #:show-data? (lambda (br who) #f))))
 
     (define/public (live?)
@@ -234,8 +234,8 @@
       (for ([header (in-list headers)])
         (for ([rx (in-list reserved-header-rxs)])
           (when (regexp-match? rx header)
-            (c-error "request contains header reserved for user-agent\n  header: ~e" header
-                     #:code 'reserved-request-header)))))
+            (h-error "request contains header reserved for user-agent\n  header: ~e" header
+                     #:party 'user #:code 'reserved-request-header)))))
 
     (define/private (url->host-bytes u)
       (send parent url->host-bytes u))
@@ -322,8 +322,8 @@
       (match (regexp-match (rx STATUS-LINE) line)
         [(list _ http-version status-code reason-phrase)
          (values line http-version status-code)]
-        [#f (s-error "expected status line from server\n  got: ~e" line
-                     #:code 'bad-status-line)]))
+        [#f (h-error "expected status line from server\n  got: ~e" line
+                     #:party 'server #:code 'bad-status-line)]))
 
     (define/public (read-raw-headers)
       (define next (b-read-bytes-line br HEADER-EOL-MODE))
@@ -430,13 +430,13 @@
       (define line (b-read-bytes-line br CHUNKED-EOL-MODE))
       (match (regexp-match #rx"^([0-9a-fA-F]+)(?:$|;)" line) ;; ignore chunk-ext
         [(list _ size-bs) (string->number (bytes->string/latin-1 size-bs) 16)]
-        [#f (s-error "expected valid chunk size from server\n  got: ~e" line
-                     #:code 'bad-chunk-size)]))
+        [#f (h-error "expected valid chunk size from server\n  got: ~e" line
+                     #:party 'server #:code 'bad-chunked-transfer)]))
     (define (expect-crlf)
       (let ([crlf (b-read-bytes br 2)])
         (unless (equal? crlf #"\r\n")
-          (s-error "expected CRLF after chunk\n  received: ~e" crlf
-                   #:code 'bad-chunked-transfer))))
+          (h-error "expected CRLF after chunk\n  received: ~e" crlf
+                   #:party 'server #:code 'bad-chunked-transfer))))
     (define (read/discard-trailer)
       (define line (b-read-bytes-line br CHUNKED-EOL-MODE))
       (unless (equal? line #"") (read/discard-trailer)))
