@@ -38,7 +38,7 @@
     (define/public (get-port) port)
 
     (define lock (make-semaphore 1))
-    (define-syntax-rule (with-lock e ...)
+    (define-syntax-rule (with-lock e ...) ;; doesn't unlock on escape
       (begin (semaphore-wait lock) (begin0 (let () e ...) (semaphore-post lock))))
 
     ;; FIXME: need marker for connections that always error (eg, not an HTTP server)
@@ -46,10 +46,14 @@
 
     (define/public (get-actual-connection [connect? #t])
       (with-lock
-        (cond [(and conn (send c live?))
+        (cond [(and conn (send conn live?))
                conn]
               [connect?
-               (let ([c (open-actual-connection)]) (set! conn c) c)]
+               (let ([c (with-handlers ([exn? (lambda (e)
+                                                (semaphore-post lock)
+                                                (raise e))])
+                          (open-actual-connection))])
+                 (begin (set! conn c) c))]
               [else #f])))
 
     (define/private (open-actual-connection)
@@ -102,7 +106,7 @@
           (error* "failed to send request (after ~s attempts)" attempts))
         (define ac (get-actual-connection))
         (cond [(send ac open-request req ccontrol) => values]
-              [else (begin (send ac abandon) (loop (add1 tries)))])))
+              [else (begin (send ac abandon) (loop (add1 attempts)))])))
 
     ))
 
