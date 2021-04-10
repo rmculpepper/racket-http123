@@ -13,10 +13,10 @@
          "regexp.rkt"
          "io.rkt"
          "request.rkt"
+         "response.rkt"
          "h2-frame.rkt"
          "h2-pack.rkt"
          "h2-stream.rkt"
-         (only-in "decode.rkt" make-decode-input-wrapper) ;; FIXME
          file/gunzip)
 (provide (all-defined-out))
 
@@ -399,19 +399,15 @@
                                                #:received 'yes
                                                #:wrapped-exn e))
              (make-headers-from-entries header-entries)))
-         (unless (send headers value-matches? ':status #px#"[0-9]{3}")
+         (unless (send headers value-matches? ':status #rx#"[1-5][0-9][0-9]")
            (h2-error "bad or missing status from server"
                      #:received 'yes #:code 'bad-status #:headers headers))
-         (define status (send headers get-value ':status))
+         (define status (send headers get-integer-value ':status))
          (send headers remove! ':status)
-         ;; ----
-         (define decode-mode
-           (cond [(send headers has-value? 'content-encoding #"gzip") 'gzip]
-                 [(send headers has-value? 'content-encoding #"deflate") 'deflate]
-                 [else #f]))
-         (define decoded-in (make-decode-input-wrapper decode-mode user-in))
-         ;; FIXME
-         (list status headers decoded-in))))
+         (new http2-response%
+              (status-code status)
+              (headers headers)
+              (content user-in)))))
 
     ;; ========================================
 

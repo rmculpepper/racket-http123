@@ -13,6 +13,7 @@
          "regexp.rkt"
          "io.rkt"
          "request.rkt"
+         "response.rkt"
          "decode.rkt"
          file/gunzip)
 (provide (all-defined-out))
@@ -81,7 +82,7 @@
 
 (define SUPPORTED-CONTENT-ENCODINGS '(#"gzip" #"deflate"))
 
-(define-rx STATUS-CODE #px#"[0-9]{3}")
+(define-rx STATUS-CODE #px#"[0-9]{3}") ;; FIXME: or [1-5][0-9]{2} ??
 (define-rx STATUS-LINE
   (rx ^ (record "HTTP/[0-9.]+") " " (record STATUS-CODE) " " (record ".*") $))
 
@@ -185,6 +186,7 @@
         ;; and it must be the same as the authority component of the
         ;; target URI (minus userinfo).
         (fprintf out "Host: ~a\r\n" (url->host-bytes u))
+        ;; FIXME: belongs to another layer...
         (fprintf out "Accept-Encoding: ~a\r\n"
                  (bytes-join SUPPORTED-CONTENT-ENCODINGS #","))
         (when (headerlines-missing? headers #rx"^(?i:User-Agent:)")
@@ -289,10 +291,8 @@
             (send headers has-value? 'connection #"close")))
       (define (make-resp content)
         (new http11-response%
-             (req req) (ccontrol ccontrol)
              (status-line status-line)
-             (status-version status-version)
-             (status-code status-code)
+             (status-code (string->number (bytes->string/latin-1 status-code)))
              (headers headers)
              (content content)))
       (define (return content pump)
@@ -324,10 +324,6 @@
         (send headers check-value 'transfer-encoding
               (lambda (b) (equal? b #"chunked"))
               (format "~s" #"chunked")))
-      (when (send headers has-key? 'content-encoding)
-        (send headers check-value 'content-encoding
-              (lambda (b) (member b SUPPORTED-CONTENT-ENCODINGS))  ;; FIXME: case-insensitive?
-              (format "member of ~a" SUPPORTED-CONTENT-ENCODINGS)))
       ;; FIXME: others?
       (void))
 
@@ -336,43 +332,20 @@
     ;; server has closed the connection), but if it does, it must also propagate
     ;; it to the content result (usually a wrapped input port).
     (define/private (make-content-pump headers)
-      (define decode-mode (get-decode-mode headers))
       (cond
         ;; Reference: https://tools.ietf.org/html/rfc7230, Section 3.3.3 (Message Body Length)
         [(send headers has-value? 'transfer-encoding #"chunked") ;; Case 3
-         (make-pump/chunked br decode-mode)]
+         (make-pump/chunked br #f)]
         [(send headers get-integer-value 'content-length) ;; Case 5
          => (lambda (len)
-              (cond [(and (< len CONTENT-LENGTH-READ-NOW) (eq? decode-mode #f))
+              (cond [(< len CONTENT-LENGTH-READ-NOW)
                      (define content (b-read-bytes br len))
                      (values content void)]
-                    [else (make-pump/content-length br len decode-mode)]))]
+                    [else (make-pump/content-length br len #f)]))]
         [else ;; Case 7
          (log-http-debug "response without Transfer-Encoding or Content-Length")
          (abandon-out-from-reader)
-         (make-pump/until-eof in decode-mode)]))
-
-    ))
-
-;; ------------------------------------------------------------
-
-(define http11-response%
-  (class* object% ()
-    (init-field req ccontrol
-                status-version  ;; Bytes
-                status-code     ;; Nat
-                status-line     ;; Bytes
-                headers         ;; headers%
-                content)        ;; Bytes or InputPort
-    (super-new)
-
-    (define/public (get-request) req)
-    (define/public (get-ccontrol) ccontrol)
-    (define/public (get-status-version) status-version)
-    (define/public (get-status-code) status-code)
-    (define/public (get-status-line) status-line)
-    (define/public (get-headers) headers)
-    (define/public (get-content) content)
+         (make-pump/until-eof in #f)]))
 
     ))
 
