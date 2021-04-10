@@ -51,7 +51,7 @@
 ;; ----------------------------------------
 
 (define headers%
-  (class* object% (headers<%> printable<%>)
+  (class* object% (headers<%> class-printable<%>)
     (init-field [headers (make-hasheq)]) ;; Hasheq[Symbol => (U Bytes (Listof Bytes))]
     (super-new)
 
@@ -113,18 +113,11 @@
 
     ;; ----
 
-    (define/public (custom-write out)
-      (headers-printer this out #t))
-    (define/public (custom-print out mode)
-      (custom-write out))
-    (define/public (custom-display out)
-      (custom-write out))
+    (define/public (get-printing-classname)
+      'headers%)
+    (define/public (get-printing-components)
+      (values '(headers) (list headers) #f))
     ))
-
-(define headers-printer
-  (make-constructor-style-printer
-   (lambda (self) 'headers)
-   (lambda (self) (list (hash-map (send self get-headers) list)))))
 
 ;; ----------------------------------------
 

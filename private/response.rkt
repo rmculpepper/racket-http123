@@ -6,40 +6,6 @@
          "decode.rkt")
 (provide (all-defined-out))
 
-(struct print:init (name value)
-  #:property prop:custom-write
-  (make-constructor-style-printer
-   (lambda (self) (print:init-name self))
-   (lambda (self) (list (print:init-value self)))))
-
-(define class-printable<%>
-  (interface* () ([prop:custom-write
-                   (let ()
-                     (define ((emit-fields make-init) self)
-                       (define-values (fieldnames fieldvals more?)
-                         (send self get-printing-components))
-                       (append (for/list ([fieldname (in-list fieldnames)]
-                                          [fieldval (in-list fieldvals)])
-                                 (make-init fieldname fieldval))
-                               (if more? (list (unquoted-printing-string "...")) '())))
-                     (define (emit-new-classname self)
-                       (string->symbol (format "new ~a" (send self get-printing-classname))))
-                     (define (emit-classname self)
-                       (string->symbol (format "~a" (send self get-printing-classname))))
-                     (define writer
-                       (make-constructor-style-printer emit-classname (emit-fields list)))
-                     (define printer
-                       (make-constructor-style-printer emit-new-classname (emit-fields print:init)))
-                     (lambda (self out mode)
-                       (case mode
-                         [(#t #f) (writer self out mode)]
-                         [else (printer self out mode)])))])
-    get-printing-classname
-    get-printing-components))
-
-(define class-never-quotable<%>
-  (interface* () ([prop:custom-print-quotable 'never])))
-
 ;; ------------------------------------------------------------
 
 (define http-response%
