@@ -10,18 +10,6 @@
    data         ;; (U Bytes (Bytes -> Void) 'removed)
    ) #:prefab)
 
-;; A ConnectionControl is one of
-;; - #f         -- means keep alive
-;; - 'close
-;; - (connection:upgrade ...)
-(struct connection:upgrade
-  (protocols    ;; (Listof Bytes)
-   ) #:prefab)
-
-(define (control:may-end? ccontrol)
-  (or (eq? ccontrol 'close) (connection:upgrade? ccontrol)))
-
-
 ;; request:can-replay? : Request -> Boolean
 ;; Can the request be replayed in a different actual connection?  Only care
 ;; about request semantics, not effect on connection state (eg close, upgrade).

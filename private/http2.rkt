@@ -371,11 +371,7 @@
     ;; ========================================
 
     ;; called by user thread
-    (define/public (open-request req ccontrol)
-      (unless (eq? ccontrol #f)
-        ;; FIXME: support 'close, make 'upgrade a separate method
-        (h2-error "connection control not supported\n  control: ~e" ccontrol
-                  #:received 'no))
+    (define/public (open-request req)
       (define stream (new-client-stream req #t))
       ;; Stream automatically sends request headers.
       (define-values (user-out resp-headers-bxe user-in)

@@ -30,8 +30,8 @@
 (define-rx STATUS-LINE
   (rx ^ (record "HTTP/[0-9.]+") " " (record STATUS-CODE) " " (record ".*") $))
 
-;; A Sending is (sending Request CControl BoxEvt[Response])
-(struct sending (req ccontrol resp-bxe))
+;; A Sending is (sending Request BoxEvt[Response])
+(struct sending (req resp-bxe))
 
 ;; Represents an actual connection, without reconnect ability.
 ;; Not thread-safe: expects at most one sending thread, one reading thread.
@@ -105,16 +105,16 @@
     (define/private (end-sending)
       (semaphore-post sending-lock))
 
-    ;; open-request : Request ConnectionControl -> BoxEvt or #f
+    ;; open-request : Request -> BoxEvt or #f
     ;; Returns evt if request sent and queued, #f if cannot send in current state.
-    (define/public (open-request req ccontrol)
+    (define/public (open-request req)
       (define hls (check-req-headers (request-headers req)))
       (start-sending)
       (cond [(and (eq? state 'open) (not send-in-progress?))
              (define resp-bxe (make-box-evt #t))
              (set! send-in-progress? #t)
-             (-send-request req hls ccontrol)
-             (enqueue (sending req ccontrol resp-bxe))
+             (-send-request req hls)
+             (enqueue (sending req resp-bxe))
              (set! send-in-progress? #f)
              (end-sending)
              resp-bxe]
@@ -122,7 +122,7 @@
              (end-sending)
              #f]))
 
-    (define/private (-send-request req hls ccontrol)
+    (define/private (-send-request req hls)
       (match-define (request method u _ data) req)
       (fprintf out "~a ~a HTTP/1.1\r\n" method (url->bytes u))
       (begin
@@ -144,8 +144,7 @@
               [else
                ;; If no content data, don't add Content-Length header.
                ;; FIXME!!!
-               (void)])
-        (send-connection-control ccontrol))
+               (void)]))
       (for ([hl (in-list hls)])
         (fprintf out "~a\r\n" hl))
       (fprintf out "\r\n")
@@ -162,8 +161,7 @@
             [(bytes? data)
              (write-bytes data out)]
             [else (void)])
-      (flush-output out)
-      (when (eq? ccontrol 'close) (abandon-out)))
+      (flush-output out))
 
     (define/private (check-req-headers headers)
       (define hls (normalize-headerlines headers))
@@ -177,17 +175,6 @@
     (define/private (url->host-bytes u)
       (send parent url->host-bytes u))
 
-    (define/private (send-connection-control ccontrol)
-      (match ccontrol
-        ['close
-         (fprintf out "Connection: close\r\n")]
-        [(or 'keep-alive #f)
-         (void)]
-        [(connection:upgrade protocols)
-         (fprintf out "Connection: upgrade\r\n")
-         (fprintf out "Upgrade: ~a\r\n"
-                  (bytes-join protocols #", "))]))
-
     ;; ============================================================
     ;; Reader thread
 
@@ -196,13 +183,13 @@
     (define/private (reader)
       (define sr (dequeue))
       (define resp-set? #f)
-      (match-define (sending req ccontrol bxe) sr)
+      (match-define (sending req bxe) sr)
       ((with-handlers ([exn? (lambda (e)
                                (close-from-reader)
                                (unless resp-set?
                                  (box-evt-set! bxe (lambda () (raise e))))
                                (lambda () (void)))])
-         (define-values (resp close? pump) (read-response req ccontrol))
+         (define-values (resp close? pump) (read-response req))
          (when close? (abandon-out-from-reader))
          (box-evt-set! bxe (lambda () resp))
          (set! resp-set? #t)
@@ -221,7 +208,7 @@
     ;; ----------------------------------------
     ;; Response (Input)
 
-    (define/private (read-response req ccontrol)
+    (define/private (read-response req)
       (define method (request-method req))
       (define-values (status-line status-version status-code) (read-status-line))
       (define raw-headers (read-raw-headers))
@@ -235,7 +222,7 @@
                  (regexp-match? #rx"^2.." status-code))))
       (check-headers method no-content? headers)
       (define close?
-        (or (eq? ccontrol 'close)
+        (or ;; FIXME: if we requested Connection: close
             (send headers has-value? 'connection #"close")))
       (define (make-resp content)
         (new http11-response%

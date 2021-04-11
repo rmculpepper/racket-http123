@@ -94,18 +94,18 @@
 
     ;; ----------------------------------------
 
-    ;; sync-request : Request CControl -> Response
-    (define/public (sync-request req ccontrol)
-      (sync (async-request req ccontrol)))
+    ;; sync-request : Request -> Response
+    (define/public (sync-request req)
+      (sync (async-request req)))
 
-    ;; async-request : Request CControl -> Evt[Response]
-    (define/public (async-request req ccontrol)
+    ;; async-request : Request -> Evt[Response]
+    (define/public (async-request req)
       (define TRIES 2)
       (let loop ([attempts 0])
         (unless (< attempts TRIES)
           (h-error "failed to send request (after ~s attempts)" attempts))
         (define ac (get-actual-connection))
-        (cond [(send ac open-request req ccontrol) => values]
+        (cond [(send ac open-request req) => values]
               [else (begin (send ac abandon) (loop (add1 attempts)))])))
 
     ))
@@ -114,9 +114,9 @@
 (begin (define hs '((#"user-agent" #"Racket (http123)") (#"accept-encoding" #"gzip")))
        (define req (request 'GET (string->url "https://www.google.com/") hs #f))
        (define c (connect "www.google.com" 443 'auto)))
-#; (define r (send c sync-request req #f))
+#; (define r (send c sync-request req))
 
 #;
 (begin (define req1 (request 'GET (string->url "http://www.neverssl.com/") hs #f))
        (define c1 (connect "www.neverssl.com" 80 #f)))
-#; (define r1 (send c1 sync-request req #f))
+#; (define r1 (send c1 sync-request req1))
