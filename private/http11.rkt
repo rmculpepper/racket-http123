@@ -108,12 +108,12 @@
     ;; open-request : Request ConnectionControl -> BoxEvt or #f
     ;; Returns evt if request sent and queued, #f if cannot send in current state.
     (define/public (open-request req ccontrol)
-      (check-req-headers (request-headers req))
+      (define hls (check-req-headers (request-headers req)))
       (start-sending)
       (cond [(and (eq? state 'open) (not send-in-progress?))
              (define resp-bxe (make-box-evt #t))
              (set! send-in-progress? #t)
-             (-send-request req ccontrol)
+             (-send-request req hls ccontrol)
              (enqueue (sending req ccontrol resp-bxe))
              (set! send-in-progress? #f)
              (end-sending)
@@ -122,8 +122,8 @@
              (end-sending)
              #f]))
 
-    (define/private (-send-request req ccontrol)
-      (match-define (request method u headers data) req)
+    (define/private (-send-request req hls ccontrol)
+      (match-define (request method u _ data) req)
       (fprintf out "~a ~a HTTP/1.1\r\n" method (url->bytes u))
       (begin
         ;; RFC 7230 Section 5.4 (Host): The Host header is required,
@@ -133,8 +133,10 @@
         ;; FIXME: belongs to another layer...
         (fprintf out "Accept-Encoding: ~a\r\n"
                  (bytes-join SUPPORTED-CONTENT-ENCODINGS #","))
-        (when (headerlines-missing? headers #rx"^(?i:User-Agent:)")
+        (when (headerlines-missing? hls #rx"^(?i:User-Agent:)")
           (fprintf out "User-Agent: ~a\r\n" default-user-agent))
+        (when (headerlines-missing? hls #rx"^(?i:Accept-Encoding:)")
+          (fprintf out "Accept-Encoding: ~a\r\n" default-accept-encoding))
         (cond [(procedure? data)
                (fprintf out "Transfer-Encoding: chunked\r\n")]
               [(bytes? data)
@@ -144,8 +146,8 @@
                ;; FIXME!!!
                (void)])
         (send-connection-control ccontrol))
-      (for ([h (in-list headers)])
-        (fprintf out "~a\r\n" h))
+      (for ([hl (in-list hls)])
+        (fprintf out "~a\r\n" hl))
       (fprintf out "\r\n")
       (cond [(procedure? data)
              (let ([out out])
@@ -164,11 +166,13 @@
       (when (eq? ccontrol 'close) (abandon-out)))
 
     (define/private (check-req-headers headers)
-      (for ([header (in-list headers)])
+      (define hls (normalize-headerlines headers))
+      (for ([hl (in-list hls)])
         (for ([rx (in-list reserved-headerline-rxs)])
-          (when (regexp-match? rx header)
-            (h-error "request contains header reserved for user-agent\n  header: ~e" header
-                     #:code 'reserved-request-header)))))
+          (when (regexp-match? rx hl)
+            (h-error "request contains header reserved for user-agent\n  header: ~e" hl
+                     (hasheq 'code 'reserved-request-header)))))
+      hls)
 
     (define/private (url->host-bytes u)
       (send parent url->host-bytes u))
@@ -254,7 +258,7 @@
         [(list _ http-version status-code reason-phrase)
          (values line http-version status-code)]
         [#f (h-error "expected status line from server\n  got: ~e" line
-                     #:version 'http/1.1 #:code 'bad-status-line)]))
+                     #:info (hasheq 'version 'http/1.1 'code 'bad-status-line))]))
 
     (define/public (read-raw-headers)
       (define next (b-read-bytes-line br HEADER-EOL-MODE))

@@ -411,7 +411,6 @@
 
 (define reserved-headers
   '(host
-    accept-encoding ;; FIXME
     content-length
     connection
     keep-alive
@@ -422,7 +421,6 @@
 
 (define reserved-headerline-rxs
   '(#rx#"^(?i:Host):"
-    #rx#"^(?i:Accept-Encoding):" ;; In principle, this belongs to a separate layer...
     #rx#"^(?i:Content-Length):"
     #rx#"^(?i:Connection|Keep-Alive|Upgrade):"
     #rx#"^(?i:Transfer-Encoding|TE|Trailer):"))

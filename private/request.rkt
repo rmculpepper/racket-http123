@@ -2,15 +2,6 @@
 (require racket/match)
 (provide (all-defined-out))
 
-;; A RequestEntry is
-(struct rqentry
-  (req                  ;; Request, maybe copy w/o data
-   ccontrol             ;; ConnectionControl
-   ) #:transparent)
-
-(define (make-rqentry req ccontrol)
-  (rqentry (request:copy-for-queue req) ccontrol))
-
 ;; A Request is:
 (struct request
   (method       ;; Symbol, like 'GET

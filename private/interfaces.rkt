@@ -11,6 +11,8 @@
 (define default-user-agent
   (format "Racket/~a (http123)" (version)))
 
+(define default-accept-encoding #"gzip, deflate")
+
 ;; ============================================================
 ;; Interfaces
 
@@ -108,7 +110,7 @@
                  #:wrapped-exn [wrapped-exn #f]
                  #:base-info [base-info (h-error-info)]
                  fmt . args)
-  (define info* (hash-set** (merge-info base-info info) '(wrapped-exn) wrapped-exn))
+  (define info* (hash-set** (merge-info base-info info) '(wrapped-exn) (list wrapped-exn)))
   (let/ec k
     (raise (exn:fail:http123
             (format "~a: ~a"
