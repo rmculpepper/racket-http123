@@ -21,62 +21,6 @@
 ;; References:
 ;; - HTTP/1.1: https://tools.ietf.org/html/rfc7230
 
-(define http11-connection%
-  (class* object% (#; http-connection<%>)
-    (init-field host
-                port
-                ssl)
-    (super-new)
-
-    (define/public (get-host) host)
-    (define/public (get-port) port)
-
-    ;; FIXME: need marker for connections that always error (eg, not an HTTP server)
-    (define conn #f)
-
-    (define/public (get-actual-connection)
-      (cond [(and conn (send conn live?))
-             conn]
-            [else
-             (define c (open-actual-connection))
-             (set! conn c)
-             c]))
-
-    (define/public (open-actual-connection)
-      (define-values (in out)
-        (cond [ssl (ssl-connect host port ssl)]
-              [else (tcp-connect host port)]))
-      (new http11-actual-connection%
-           (parent this) (in in) (out out)))
-
-    (define/public (close)
-      (when conn
-        (define c conn)
-        (set! conn #f)
-        (send c close)))
-
-    (define/public (url->host-bytes u)
-      (define scheme (url-scheme u))
-      (define host (or (url-host u) (get-host)))
-      (define port (or (url-port u) (get-port)))
-      (string->bytes/utf-8
-       (cond [(= port (case scheme [("http") 80] [("https") 443] [else #f])) host]
-             [else (format "~a:~a" host port)])))
-
-    (define/public (sync-request req ccontrol)
-      (sync (async-request req ccontrol)))
-
-    (define/public (async-request req ccontrol)
-      (define TRIES 2)
-      (let loop ([tries TRIES])
-        (when (zero? tries)
-          (h-error "failed to send request (too many attempts)"))
-        (define ac (get-actual-connection))
-        (cond [(send ac open-request req ccontrol) => values]
-              [else (begin (send ac abandon) (loop (sub1 tries)))])))
-
-    ))
-
 (define STATUS-EOL-MODE 'return-linefeed)
 (define HEADER-EOL-MODE 'return-linefeed)
 
