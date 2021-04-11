@@ -77,7 +77,7 @@
 
     (define/public (get-sending-dt) sending-dt)
 
-    ;; closed? : (U #f 'by-goaway 'by-error)
+    ;; closed? : (U #f 'by-goaway 'by-error 'user-abandoned 'EOF)
     ;; This state is used by the manager and by user threads.
     ;; The reader keeps reading until EOF.
     (define closed? #f)
@@ -185,13 +185,13 @@
           (for/list ([fr (in-list (cdr frs))])
             (fp:continuation-headerbf (frame-payload fr))))
         (define headerb (apply bytes-append first-headerbf rest-headerbfs))
-        (with-handlers ([exn? (lambda (e)
-                                (connection-error
-                                 error:COMPRESSION_ERROR
-                                 #:streamid streamid
-                                 #:raise (merge-exn e "error decoding headers"
-                                                    (hasheq 'code 'malformed-headers
-                                                            'received 'yes))))])
+        (with-handler (lambda (e)
+                        (connection-error
+                         error:COMPRESSION_ERROR
+                         #:streamid streamid
+                         #:raise (merge-exn e "error decoding headers"
+                                            (hasheq 'code 'malformed-headers
+                                                    'received 'yes))))
           (decode-headers headerb reading-dt)))
       (match (car frs)
         [(frame (== type:HEADERS) flags streamid
@@ -395,13 +395,13 @@
        resp-headers-bxe
        (lambda (header-entries)
          (define headers
-           (with-handler (lambda (e) (h2-error "error processing headers"
-                                               #:received 'yes
-                                               #:wrapped-exn e))
+           (with-handler (lambda (e)
+                           (h2-error "error processing headers"
+                                     #:info (hasheq 'received 'yes 'wrapped-exn e)))
              (make-headers-from-entries header-entries)))
          (unless (send headers value-matches? ':status #rx#"[1-5][0-9][0-9]")
            (h2-error "bad or missing status from server"
-                     #:received 'yes #:code 'bad-status #:headers headers))
+                     #:info (hasheq 'received 'yes 'code 'bad-status 'heades headers)))
          (define status (send headers get-integer-value ':status))
          (send headers remove! ':status)
          (new http2-response%

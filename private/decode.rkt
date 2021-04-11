@@ -84,12 +84,12 @@
       (match (regexp-match #rx"^([0-9a-fA-F]+)(?:$|;)" line) ;; ignore chunk-ext
         [(list _ size-bs) (string->number (bytes->string/latin-1 size-bs) 16)]
         [#f (h-error "expected valid chunk size from server\n  got: ~e" line
-                     #:received 'yes #:code 'bad-chunked-transfer)]))
+                     #:info (hasheq 'received 'yes 'code 'bad-chunked-transfer))]))
     (define (expect-crlf)
       (let ([crlf (b-read-bytes br 2)])
         (unless (equal? crlf #"\r\n")
           (h-error "expected CRLF after chunk\n  received: ~e" crlf
-                   #:received 'yes #:code 'bad-chunked-transfer))))
+                   #:info (hasheq 'received 'yes 'code 'bad 'chunked-transfer)))))
     (define (read/discard-trailer)
       (define line (b-read-bytes-line br CHUNKED-EOL-MODE))
       (unless (equal? line #"") (read/discard-trailer)))

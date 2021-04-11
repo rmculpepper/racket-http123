@@ -70,7 +70,7 @@
       (define TRIES 2)
       (let loop ([tries TRIES])
         (when (zero? tries)
-          (error* "failed to send request (too many attempts)"))
+          (h-error "failed to send request (too many attempts)"))
         (define ac (get-actual-connection))
         (cond [(send ac open-request req ccontrol) => values]
               [else (begin (send ac abandon) (loop (sub1 tries)))])))
@@ -130,7 +130,7 @@
         #:error-handler
         (make-binary-reader-error-handler
          #:error (lambda (br who fmt . args)
-                   (apply h-error fmt args #:code 'read #:version 'http/1.1))
+                   (apply h-error fmt args #:info (hasheq 'code 'read 'version 'http/1.1)))
          #:show-data? (lambda (br who) #f))))
 
     (define/public (live?)

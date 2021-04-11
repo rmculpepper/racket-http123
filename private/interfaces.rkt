@@ -33,43 +33,8 @@
     CONNECT
     ))
 
-;; implementation interface
-(define http-impl<%>
-  (interface ()
-    connect ;; String PortNat -> http-connection<%> or error
-    ;; Connect to host:port (or return existing connection).
-
-    disconnect ;; String PortNat -> Void
-    ;; Advice to drop existing connection to host:port (omit?)
-    ))
-
-;; ------------------------------------------------------------
-
-;; http-connection<%> represents a connection to an HTTP server
-(define http-connection<%>
-  (interface ()
-
-    request/method ;;
-    ))
-
 ;; ------------------------------------------------------------
 ;; Response
-
-(define http-response<%>
-  (interface ()
-    get-response-code ;; -> Nat, eg 200
-    get-response-line ;; -> Bytes
-    get-headers ;; -> ??
-    get-header ;; -> ??
-    get-content ;; -> Any -- usually Bytes
-    ))
-
-;; ------------------------------------------------------------
-;; Cookie Jar
-
-(define cookie-jar<%>
-  (interface ()
-    ))
 
 ;; ============================================================
 ;; Who
@@ -93,13 +58,9 @@
                 #:code [code #f]
                 fmt . args)
   (define info (h-error-info))
-  (cond [(not (hash-empty? info))
-         => (lambda (info)
-              (apply h-error #:who who #:code code #:info info fmt args))]
-        [else (apply error (or (http123-who) who 'http123) fmt args)]))
-
-(define (internal-error fmt . args)
-  (apply error (http123-who) (string-append "internal error: " fmt) args))
+  (if (hash-empty? info)
+      (apply error (or (http123-who) who 'http123) fmt args)
+      (apply h-error #:who who #:code code #:info info fmt args)))
 
 (define-syntax-rule (with-handler handler . body)
   (with-handlers ([(lambda (e) #t) handler]) . body))
@@ -143,21 +104,18 @@
 ;; - 'wrapped-exn : Exn or Any          -- underlying exn
 (struct exn:fail:http123 exn:fail (info))
 
-(define (h-error #:party [party #f]
-                 #:code [code #f]
-                 #:received [received #f]
+(define (h-error #:info [info #hasheq()]
                  #:wrapped-exn [wrapped-exn #f]
-                 #:version [version #f]
-                 #:info [base-info #hasheq()]
-                 #:who [who 'http123]
+                 #:base-info [base-info (h-error-info)]
                  fmt . args)
+  (define info* (hash-set** (merge-info base-info info) '(wrapped-exn) wrapped-exn))
   (let/ec k
     (raise (exn:fail:http123
-            (format "~a: ~a" (or (http123-who) who) (apply format fmt args))
+            (format "~a: ~a"
+                    (or (http123-who) (hash-ref info* 'who #f) 'http123)
+                    (apply format fmt args))
             (continuation-marks k)
-            (hash-set** base-info
-                        '(party code received wrapped-exn version who)
-                        (list party code received wrapped-exn version who))))))
+            info*))))
 
 (define (hash-set** h ks vs)
   (let loop ([h h] [ks ks] [vs vs])
@@ -166,17 +124,12 @@
              (loop h (cdr ks) (cdr vs)))]
           [else h])))
 
-(define (h2-error #:party [party #f]
-                  #:code [code #f]
-                  #:received [received #f]
+(define (h2-error #:info [info #hasheq()]
+                  #:base-info [base-info (h-error-info)]
                   #:wrapped-exn [wrapped-exn #f]
-                  #:info [base-info #hasheq()]
-                  #:who [who 'http123]
                   fmt . args)
   (apply h-error fmt args
-         #:party party #:code code #:received received #:wrapped-exn wrapped-exn
-         #:info base-info #:who who #:version 'http/2))
-
+         #:info (hash-set info 'version 'http/2) base-info #:wrapped-exn wrapped-exn))
 
 ;; FIXME: Goal: should be clear to user whether request was sent and
 ;; received (as much as we can know, anyway)

@@ -104,9 +104,9 @@
     (define/public (check-value key predicate [description #f])
       (define v (get-value key))
       (unless (predicate v)
-        (error* "bad header value\n  header: ~e\n  expected: ~a\n  got: ~e"
-                key (or description (object-name predicate)) v
-                #:code 'bad-header-value)))
+        (h-error "bad header value\n  header: ~e\n  expected: ~a\n  got: ~e"
+                 key (or description (object-name predicate)) v
+                 #:info (hasheq 'code 'bad-header-value))))
 
     (define/public (remove! key)
       (hash-remove! headers key))
@@ -129,8 +129,8 @@
   (for ([raw-header (in-list raw-headers)])
     (define-values (key-bs val-bs) (get-kv raw-header))
     (define key (or (header-key->symbol key-bs #t)
-                    (error* "bad header key\n  key: ~e" key-bs
-                            #:who 'make-headers-from-list #:code 'bad-header-key)))
+                    (h-error "bad header key\n  key: ~e" key-bs
+                             (hasheq 'who 'make-headers-from-list 'code 'bad-header-key))))
     (cond [(hash-ref headers key #f)
            => (lambda (old-v)
                 (define old-v* (if (bytes? old-v) (list old-v) old-v))
@@ -149,8 +149,8 @@
    (lambda (raw-header)
      (match (regexp-match (rx^$ HEADER) raw-header)
        [(list _ key-bs val-bs) (values key-bs val-bs)]
-       [_ (error* "malformed header line\n  line: ~e" raw-header
-                  #:who 'make-headers-from-lines #:code 'bad-header-line)]))))
+       [_ (h-error "malformed header line\n  line: ~e" raw-header
+                   (hasheq 'who 'make-headers-from-lines 'code 'bad-header-line))]))))
 
 
 ;; A HeaderEntry is (list Bytes Bytes) | (list Bytes Bytes 'never-add)
@@ -167,7 +167,7 @@
             (? bytes? (and (regexp (rx^$ FIELD-VALUE)) value))
             (? (lambda (v) (member v '((never-add) ())))))
      (values key value)]
-    [h (error* "malformed header entry\n  header: ~e" h)]))
+    [h (h-error "malformed header entry\n  header: ~e" h)]))
 
 
 ;; ============================================================
@@ -195,15 +195,18 @@
      (bytes-append (normalize-key key) #": " (normalize-value value))]
     [(? bytes)
      (cond [(regexp-match-exact? (rx HEADER) h) h]
-           [else (error 'normalize-header "bad header line\n  header: ~e" h)])]
+           [else (h-error "bad header line\n  header: ~e" h
+                          #:info (hasheq 'who 'normalize-header))])]
     [(? string?)
      (cond [(regexp-match-exact? (rx HEADER) h) (string->bytes/latin-1 h)]
-           [else (error 'normalize-header "bad header line\n  header: ~e" h)])]))
+           [else (h-error "bad header line\n  header: ~e" h
+                          #:info (hasheq 'who 'normalize-header))])]))
 (define (normalize-key key)
   (match key
     [(? bytes? (regexp (rx^$ TOKEN))) key]
     [(? string? (regexp (rx^$ TOKEN))) (string->bytes/latin-1 key)]
-    [else (error 'normalize-header "bad header key\n  key: ~e" key)]))
+    [else (h-error "bad header key\n  key: ~e" key
+                   #:info (hasheq 'who 'normalize-header))]))
 (define (normalize-value value)
   (match value
     [(? string? (regexp (rx^$ (rx OWS (record FIELD-VALUE) OWS))
@@ -212,7 +215,8 @@
     [(? bytes? (regexp (rx^$ (rx OWS (record FIELD-VALUE) OWS))
                        (list _ field-value)))
      field-value]
-    [_ (error 'normalize-header "bad header value\n  value: ~e" value)]))
+    [_ (h-error "bad header value\n  value: ~e" value
+                #:info (hasheq 'who 'normalize-header))]))
 
 (define (headerlines-missing? hs rx)
   (not (for/or ([h (in-list hs)])
@@ -248,7 +252,8 @@
         [(and (string? key) (header-key-name-ci? key))
          (string->symbol (string-downcase key))]
         [fail-ok? #f]
-        [else (error 'header-key->symbol "bad header key\n  key: ~e" key)]))
+        [else (h-error "bad header key\n  key: ~e" key
+                       #:info (hasheq 'who 'header-key->symbol))]))
 
 ;; header-key->bytes : HeaderKey -> Bytes, or #f if fail-ok?
 (define (header-key->bytes key0 [fail-ok? #f])
@@ -261,7 +266,8 @@
           [(and (bytes? key) (header-key-name-ci? key))
            (string->bytes/latin-1 (string-downcase (bytes->string/latin-1 key)))]
           [fail-ok? #f]
-          [else (error 'header-key->bytes "bad header key\n  key: ~e" key0)])))
+          [else (h-error "bad header key\n  key: ~e" key0
+                         #:info (hasheq 'who 'header-key->bytes))])))
 
 (define (header-key-name? s)
   (regexp-match? (rx^$ lower-TOKEN) s))
