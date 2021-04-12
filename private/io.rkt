@@ -103,17 +103,21 @@
          #t]
         [else #f]))
 
+(define (box-evt-ready? be)
+  (not (eq? (unbox (box-evt-b be)) box-is-unset)))
+
 ;; ----------------------------------------
 
 ;; wrap-input-port : InputPort -> (values InputPort (-> Exn Void))
 ;; FIXME: should reader receive exn immediately or in place of EOF?
-(define (wrap-input-port in #:delay-to-eof? [delay-to-eof? #f])
+(define (wrap-input-port in [name (object-name in)]
+                         #:delay-to-eof? [delay-to-eof? #f])
   (define exnbe (make-box-evt))
   (define exn-evt (wrap-evt exnbe raise))
   ;; FIXME: could implement check directly, instead of via sync/timeout
-  (define (check-early) (unless delay-to-eof? (sync/timeout 0 exn-evt)))
-  (define (check-at-eof) (sync/timeout 0 exn-evt))
-  (define name (object-name in))
+  (define (check) (when (box-evt-ready? exnbe) (sync/timeout 0 exn-evt)))
+  (define (check-early) (unless delay-to-eof? (check)))
+  (define (check-at-eof) (check))
   (define (read-in buf)
     (check-early)
     (define r (read-bytes-avail!* buf in))
@@ -157,7 +161,7 @@
 
 (define (make-wrapped-pipe)
   (define-values (in out) (make-pipe))
-  (define-values (wrapped-in raise-exn) (wrap-input-port in))
+  (define-values (wrapped-in raise-exn) (wrap-input-port in 'wrapped-pipe))
   (values wrapped-in out raise-exn))
 
 ;; ----------------------------------------
