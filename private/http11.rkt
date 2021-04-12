@@ -25,7 +25,10 @@
 (struct sending (req resp-bxe))
 
 ;; Represents an actual connection, without reconnect ability.
-;; Not thread-safe: expects at most one sending thread, one reading thread.
+;; Thread-safe:
+;; - Sends are done in the user thread making the request, with a lock
+;;   for mutual exclusion.
+;; - Reads are done in a separate reader thread.
 (define http11-actual-connection%
   (class* object% (#; http-connection<%>)
     (init-field parent in out [try-upgrade? #t])
