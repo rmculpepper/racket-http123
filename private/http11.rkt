@@ -8,9 +8,7 @@
          "regexp.rkt"
          "io.rkt"
          "request.rkt"
-         "response.rkt"
-         "decode.rkt"
-         file/gunzip)
+         "response.rkt")
 (provide (all-defined-out))
 
 ;; References:
@@ -265,17 +263,17 @@
       (cond
         ;; Reference: https://tools.ietf.org/html/rfc7230, Section 3.3.3 (Message Body Length)
         [(send headers has-value? 'transfer-encoding #"chunked") ;; Case 3
-         (make-pump/chunked br #f)]
+         (make-pump/chunked br)]
         [(send headers get-integer-value 'content-length) ;; Case 5
          => (lambda (len)
               (cond [(< len CONTENT-LENGTH-READ-NOW)
                      (define content (b-read-bytes br len))
                      (values content void)]
-                    [else (make-pump/content-length br len #f)]))]
+                    [else (make-pump/content-length br len)]))]
         [else ;; Case 7
          (log-http-debug "response without Transfer-Encoding or Content-Length")
          (abandon-out-from-reader)
-         (make-pump/until-eof in #f)]))
+         (make-pump/until-eof in)]))
 
     ))
 
@@ -285,45 +283,31 @@
 (define CHUNKED-EOL-MODE 'return-linefeed)
 (define CONTENT-LENGTH-READ-NOW (expt 2 20)) ;; FIXME
 
-(define (make-decode-wrapper decode-mode out-to-user raise-user-exn)
-  (cond [(memq decode-mode '(gzip deflate))
-         (define-values (decode-in out-to-decode raise-decode-exn) (make-wrapped-pipe))
-         (thread (lambda ()
-                   (with-handlers ([exn? (lambda (e) (raise-user-exn e) (raise e))])
-                     (case decode-mode
-                       [(gzip) (gunzip-through-ports decode-in out-to-user)]
-                       [(deflate) (inflate decode-in out-to-user)])
-                     (close-output-port out-to-user))))
-         (values out-to-decode raise-decode-exn)]
-        [else (values out-to-user raise-user-exn)]))
-
-(define (make-pump decode-mode proc)
+(define (make-pump proc)
   (define-values (wrapped-user-in out-to-user raise-user-exn) (make-wrapped-pipe))
-  (define-values (out-to-decode raise-decode-exn)
-    (make-decode-wrapper decode-mode out-to-user raise-user-exn))
   (values wrapped-user-in
           (lambda ()
-            (with-handlers ([exn? (lambda (e) (raise-decode-exn e) (raise e))])
-              (proc out-to-decode)))))
+            (with-handlers ([exn? (lambda (e) (raise-user-exn e) (raise e))])
+              (proc out-to-user)))))
 
-(define (make-pump/content-length br len decode-mode)
-  (define (forward/content-length out-to-decode)
-    (write-bytes (b-read-bytes br len) out-to-decode)
-    (close-output-port out-to-decode))
-  (make-pump decode-mode forward/content-length))
+(define (make-pump/content-length br len)
+  (define (forward/content-length out-to-user)
+    (write-bytes (b-read-bytes br len) out-to-user)
+    (close-output-port out-to-user))
+  (make-pump forward/content-length))
 
-(define (make-pump/until-eof in decode-mode)
-  (define (forward/until-eof out-to-decode)
+(define (make-pump/until-eof in)
+  (define (forward/until-eof out-to-user)
     (let loop ()
       (define next (read-bytes PIPE-SIZE in))
       (cond [(eof-object? next)
              (close-input-port in)
-             (close-output-port out-to-decode)]
-            [else (begin (write-bytes next out-to-decode) (loop))])))
-  (make-pump decode-mode forward/until-eof))
+             (close-output-port out-to-user)]
+            [else (begin (write-bytes next out-to-user) (loop))])))
+  (make-pump forward/until-eof))
 
-(define (make-pump/chunked br decode-mode)
-  (define (forward/chunked out-to-decode)
+(define (make-pump/chunked br)
+  (define (forward/chunked out-to-user)
     (define (read-chunk-size)
       (define line (b-read-bytes-line br CHUNKED-EOL-MODE))
       (match (regexp-match #rx"^([0-9a-fA-F]+)(?:$|;)" line) ;; ignore chunk-ext
@@ -342,13 +326,13 @@
       (define chunk-size (read-chunk-size))
       (cond [(zero? chunk-size)
              (read/discard-trailer)
-             (close-output-port out-to-decode)]
+             (close-output-port out-to-user)]
             [else
              (define chunk-data (b-read-bytes br chunk-size))
-             (write-bytes chunk-data out-to-decode)
+             (write-bytes chunk-data out-to-user)
              (expect-crlf)
              (loop)])))
-  (make-pump decode-mode forward/chunked))
+  (make-pump forward/chunked))
 
 ;; ------------------------------------------------------------
 
