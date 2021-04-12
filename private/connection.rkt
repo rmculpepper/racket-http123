@@ -5,6 +5,7 @@
          net/url-string
          openssl
          "interfaces.rkt"
+         "request.rkt"
          "http11.rkt"
          "http2.rkt")
 (provide (all-defined-out))
@@ -39,12 +40,14 @@
     (define/public (get-actual-connection [connect? #t])
       (with-lock
         (cond [(and conn (send conn live?))
+               (log-http-debug "using existing connection")
                conn]
               [connect?
                (let ([c (with-handlers ([exn? (lambda (e)
                                                 (semaphore-post lock)
                                                 (raise e))])
                           (open-actual-connection))])
+                 (log-http-debug "created new actual connection")
                  (begin (set! conn c) c))]
               [else #f])))
 
@@ -52,12 +55,20 @@
       (cond [ssl
              (define-values (in out)
                (ssl-connect host port ssl #:alpn '(#"h2" #"http/1.1")))
-             (cond [(equal? #"h2" (ssl-get-alpn-selected in))
-                    (make-http2 in out)]
-                   [else (make-http1 in out #f)])]
+             (case (ssl-get-alpn-selected in)
+               [(#"h2")
+                (log-http-debug "connected with TLS, ALPN=h2")
+                (make-http2 in out)]
+               [(#"http/1.1")
+                (log-http-debug "connected with TLS, ALPN=http/1.1")
+                (make-http1 in out #f)]
+               [else
+                (log-http-debug "connected with TLS, no ALPN, so http/1.1")
+                (make-http1 in out #f)])]
             [else
              (define-values (in out)
                (tcp-connect host port))
+             (log-http-debug "connected without TLS, http/1.1")
              (make-http1 in out #t)]))
 
     (define/private (make-http1 in out try-upgrade?)
@@ -72,6 +83,14 @@
         (when conn
           (define c conn)
           (send c abandon)
+          (set! conn #f))))
+
+    ;; ----------------------------------------
+
+    (define/public (on-actual-disconnect ac)
+      (with-lock
+        (when (eq? conn ac)
+          (log-http-debug "disconnected actual connection")
           (set! conn #f))))
 
     ;; ----------------------------------------

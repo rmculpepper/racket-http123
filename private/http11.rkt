@@ -51,9 +51,12 @@
       (with-lock
         (set! queue (append queue (list v)))
         (semaphore-post queue-count-sema)))
-    (define/private (dequeue)
-      (semaphore-wait queue-count-sema)
-      (with-lock (begin0 (and (pair? queue) (begin0 (car queue) (set! queue (cdr queue)))))))
+    (define/private (dequeue-evt k)
+      (wrap-evt queue-count-sema
+                (lambda (ignored)
+                  (k (with-lock
+                       (begin0 (car queue)
+                         (set! queue (cdr queue))))))))
 
     ;; A State is one of
     ;; - 'open
@@ -173,7 +176,18 @@
     (define reader-thread (thread (lambda () (reader))))
 
     (define/private (reader)
-      (define sr (dequeue))
+      (let loop ([in? #t])
+        (sync (dequeue-evt (lambda (sr)
+                             (cond [(eof-object? (peek-byte in))
+                                    (abandon/close-after-timeout)]
+                                   [else (reader* sr)])))
+              (cond [in? (wrap-evt in
+                                   (lambda (ignored)
+                                     (cond [(eof-object? (peek-byte in))
+                                            (abandon/close-after-timeout)]
+                                           [else (loop #f)])))]
+                    [else never-evt]))))
+    (define/private (reader* sr)
       (define resp-set? #f)
       (match-define (sending req bxe) sr)
       ((with-handlers ([exn? (lambda (e)
@@ -188,14 +202,21 @@
          (pump)
          (cond [close? (lambda () (close-from-reader))]
                [else (lambda () (reader))]))))
+    (define/private (abandon/close-after-timeout)
+      (define TIMEOUT 1)
+      (abandon-out-from-reader)
+      (sleep TIMEOUT)
+      (close-from-reader))
 
     (define/private (abandon-out-from-reader)
       (with-lock (set! state 'abandoned-by-reader))
-      (abandon-port out))
+      (abandon-port out)
+      (send parent on-actual-disconnect this))
     (define/private (close-from-reader)
       (with-lock (set! state 'closed-by-reader))
       (close-output-port out)
-      (close-input-port in))
+      (close-input-port in)
+      (send parent on-actual-disconnect this))
 
     ;; ----------------------------------------
     ;; Response (Input)
