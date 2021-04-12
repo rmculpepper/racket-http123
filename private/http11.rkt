@@ -17,8 +17,6 @@
 (define STATUS-EOL-MODE 'return-linefeed)
 (define HEADER-EOL-MODE 'return-linefeed)
 
-(define SUPPORTED-CONTENT-ENCODINGS '(#"gzip" #"deflate"))
-
 (define-rx STATUS-CODE #px#"[0-9]{3}") ;; FIXME: or [1-5][0-9]{2} ??
 (define-rx STATUS-LINE
   (rx ^ (record "HTTP/[0-9.]+") " " (record STATUS-CODE) " " (record ".*") $))
@@ -124,8 +122,6 @@
         ;; target URI (minus userinfo).
         (fprintf out "Host: ~a\r\n" (url->host-bytes u))
         ;; FIXME: belongs to another layer...
-        (fprintf out "Accept-Encoding: ~a\r\n"
-                 (bytes-join SUPPORTED-CONTENT-ENCODINGS #","))
         (when (headerlines-missing? hls #rx"^(?i:User-Agent:)")
           (fprintf out "User-Agent: ~a\r\n" default-user-agent))
         (when (headerlines-missing? hls #rx"^(?i:Accept-Encoding:)")
