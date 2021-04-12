@@ -110,21 +110,22 @@
                  #:wrapped-exn [wrapped-exn #f]
                  #:base-info [base-info (h-error-info)]
                  fmt . args)
-  (define info* (hash-set** (merge-info base-info info) '(wrapped-exn) (list wrapped-exn)))
-  (let/ec k
-    (raise (exn:fail:http123
-            (format "~a: ~a"
-                    (or (http123-who) (hash-ref info* 'who #f) 'http123)
-                    (apply format fmt args))
-            (continuation-marks k)
-            info*))))
+  (let* ([info (merge-info base-info info)]
+         [info (if wrapped-exn (hash-set info 'wrapped-exn wrapped-exn) info)])
+    (let/ec k
+      (raise (exn:fail:http123
+              (format "~a: ~a"
+                      (or (http123-who) (hash-ref info 'who #f) 'http123)
+                      (apply format fmt args))
+              (continuation-marks k)
+              info)))))
 
-(define (hash-set** h ks vs)
-  (let loop ([h h] [ks ks] [vs vs])
-    (cond [(pair? ks)
-           (let ([h (if (car vs) (hash-set h (car ks) (car vs)) h)])
-             (loop h (cdr ks) (cdr vs)))]
-          [else h])))
+(define (h1-error #:info [info #hasheq()]
+                  #:base-info [base-info (h-error-info)]
+                  #:wrapped-exn [wrapped-exn #f]
+                  fmt . args)
+  (apply h-error fmt args
+         #:info (hash-set info 'version 'http/1.1) base-info #:wrapped-exn wrapped-exn))
 
 (define (h2-error #:info [info #hasheq()]
                   #:base-info [base-info (h-error-info)]
