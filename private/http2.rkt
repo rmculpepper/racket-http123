@@ -1,23 +1,16 @@
 #lang racket/base
 (require racket/class
          racket/match
-         racket/list
-         racket/port
-         racket/tcp
-         net/url-structs
-         net/url-string
          binaryio/reader
          openssl
          "interfaces.rkt"
          "header.rkt"
-         "regexp.rkt"
          "io.rkt"
          "request.rkt"
          "response.rkt"
          "h2-frame.rkt"
          "h2-pack.rkt"
-         "h2-stream.rkt"
-         file/gunzip)
+         "h2-stream.rkt")
 (provide (all-defined-out))
 
 ;; References:

@@ -1,7 +1,6 @@
 #lang racket/base
 (require racket/class
          racket/match
-         racket/struct
          "interfaces.rkt"
          "decode.rkt")
 (provide (all-defined-out))

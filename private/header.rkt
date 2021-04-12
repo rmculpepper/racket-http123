@@ -4,7 +4,6 @@
          racket/match
          racket/list
          racket/symbol
-         racket/struct
          "interfaces.rkt"
          "regexp.rkt")
 (provide (all-defined-out))

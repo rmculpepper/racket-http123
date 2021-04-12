@@ -1,18 +1,10 @@
 #lang racket/base
 (require racket/class
          racket/match
-         racket/list
-         racket/port
          racket/tcp
-         net/url-structs
          net/url-string
-         binaryio/reader
          openssl
          "interfaces.rkt"
-         "header.rkt"
-         "regexp.rkt"
-         "io.rkt"
-         "request.rkt"
          "http11.rkt"
          "http2.rkt")
 (provide (all-defined-out))

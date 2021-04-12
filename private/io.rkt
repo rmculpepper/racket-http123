@@ -1,6 +1,5 @@
 #lang racket/base
-(require ffi/unsafe/atomic
-         racket/match
+(require racket/match
          racket/tcp
          openssl)
 (provide (all-defined-out))

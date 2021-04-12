@@ -3,9 +3,7 @@
          racket/vector
          binaryio/reader
          binaryio/bitvector
-         binaryio/prefixcode
-         "regexp.rkt"
-         "header.rkt")
+         binaryio/prefixcode)
 (provide (all-defined-out))
 
 ;; Reference:
