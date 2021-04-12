@@ -62,12 +62,14 @@
 
     (define/override (get-version) 'http/1.1)
     (define/public (get-status-line) status-line)
+    (define/override (get-printing-classname) 'http11-response%)
     ))
 
 (define http2-response%
   (class* http-response% ()
     (super-new)
     (define/override (get-version) 'http/2)
+    (define/override (get-printing-classname) 'http2-response%)
     ))
 
 ;; ============================================================
@@ -85,6 +87,13 @@
 
 (define (status-code-cacheable-by-default? status-code) ;; 6.1
   (and (memq status-code '(200 203 204 206 300 301 404 405 410 414 501)) #t))
+
+(define (status-code-with-content? status-code) ;; 3.3.3
+  ;; #t means might have content; #f means certainly does not
+  ;; Also, response to HEAD request.
+  (cond [(<= 100 status-code 199) #f]
+        [(memv status-code '(204 304)) #f]
+        [else #t]))
 
 (define (status-code-reason code)
   (case code
