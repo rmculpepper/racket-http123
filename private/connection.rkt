@@ -34,7 +34,6 @@
     (define-syntax-rule (with-lock e ...) ;; doesn't unlock on escape
       (begin (semaphore-wait lock) (begin0 (let () e ...) (semaphore-post lock))))
 
-    ;; FIXME: need marker for connections that always error (eg, not an HTTP server)
     (define conn #f)
 
     (define/public (get-actual-connection [connect? #t])

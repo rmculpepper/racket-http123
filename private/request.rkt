@@ -18,22 +18,7 @@
   (match req
     [(request method url headers data)
      (and (method:idempotent? method)
-          (small-data? data))]))
-
-(define SMALL-DATA-LIMIT (expt 2 24))
-
-(define (small-data? data)
-  (or (eq? data #f)
-      (and (bytes? data) (<= (bytes-length data) SMALL-DATA-LIMIT))))
-
-;; request:copy-for-queue : Request -> Request
-;; Make a copy w/o data for the recv queue.
-(define (request:copy-for-queue req)
-  (match req
-    [(request method url headers (? small-data? data))
-     req]
-    [(request method url headers data)
-     (request method url headers 'removed)]))
+          (or (eq? data #f) (bytes? data)))]))
 
 ;; ----------------------------------------
 
