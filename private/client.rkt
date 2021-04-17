@@ -7,9 +7,15 @@
          "connection.rkt")
 (provide (all-defined-out))
 
-(define DEFAULT-SCHEME "https")
+;; Add helpers to
+;; - create a client that uses a single connection
+;;   (eg, for CONNECT tunneling)
+;; - specialize a client (shared connection table) to add different default headers, etc
+;; - add url-for-connection hook, takes request loc, produces url to connect to
 
-(define http-client%
+;; generally, need to figure out requirements for proxies
+
+(define connection-manager%
   (class* object% ()
     (init-field [ssl 'secure])
     (super-new)
@@ -25,7 +31,8 @@
                    (log-http-debug "opening connection: ~.s" key)
                    (new http-connection% (host host) (port port) (ssl (and ssl? ssl))))))
 
-    (define/public (get-connection u)
+    (define/public (get-connection loc)
+      (define u (->url loc))
       (define scheme (url-scheme u))
       (unless scheme
         (h-error "missing scheme in URL\n  url: ~e" u))
@@ -37,20 +44,44 @@
         (h-error "missing host in URL\n  url: ~e" u))
       (get-connection* host port (case scheme [("https") #t] [else #f])))
 
-    (define/public (sync-request req)
-      (sync (async-request req)))
     (define/public (async-request req)
       (send (get-connection (request-url req)) async-request req))
-
-    ;; ------------------------------------------------------------
-
-    (define/public (GET loc #:headers [headers null] #:data [data #f])
-      (define req (request 'GET (->url loc) headers data))
-      (sync-request req))
-    (define/public (POST loc #:headers [headers null] #:data [data #f])
-      (define req (request 'POST (->url loc) headers data))
-      (sync-request req))
     ))
+
+(define (client-mixin %)
+  (class* % ()
+    (inherit async-request)
+    (super-new)
+
+    (define/public (sync-request req)
+      (sync (async-request req)))
+
+    ;; Reference: https://tools.ietf.org/html/rfc7231
+
+    (define-syntax-rule (make-method method)
+      (lambda (loc #:headers [headers null] #:data [data #f])
+        (do-method 'method loc headers data)))
+    (define-syntax-rule (make-method/no-data method)
+      (lambda (loc #:headers [headers null])
+        (do-method 'method loc headers #f)))
+    (define/public (do-method method loc headers data)
+      (define req (request method (->url loc) headers data))
+      (sync-request req))
+
+    (define/public GET (make-method 'GET))
+    (define/public HEAD (make-method/no-data 'HEAD))
+    (define/public POST (make-method 'POST))
+    (define/public PUT (make-method 'PUT))
+    (define/public DELETE (make-method/no-data 'DELETE))
+    (define/public OPTIONS (make-method/no-data 'OPTIONS))
+    (define/public TRACE (make-method/no-data 'TRACE))
+
+    #;
+    (define/public (CONNECT ??) ;; data has "no defined semantics" (4.3.6)
+      ??)
+    ))
+
+
 
 (define (default-port-for-scheme scheme)
   (case scheme [("http") 80] [("https") 443]))
