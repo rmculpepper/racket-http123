@@ -176,7 +176,7 @@
             (? bytes? (and (regexp (rx^$ FIELD-VALUE)) value))
             (? (lambda (v) (member v '((never-add) ())))))
      (values key value)]
-    [h (h-error "malformed header field entry\n  header: ~e" h)]))
+    [h (h-error "malformed header field entry\n  entry: ~e" h)]))
 
 ;; ============================================================
 ;; FlexibleHeaderList

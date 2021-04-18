@@ -47,12 +47,15 @@
       (begin (semaphore-wait lock) (begin0 (let () e ...) (semaphore-post lock))))
 
     (define queue-count-sema (make-semaphore 0))
-    (define queue null) ;; (Listof SendingRecords), mutated, oldest-first
+    (define queue null) ;; (Listof SendingRecords) or #f, mutated, oldest-first; #f = shut down
 
     (define/private (enqueue v)
       (with-lock
-        (set! queue (append queue (list v)))
-        (semaphore-post queue-count-sema)))
+        (cond [queue
+               (set! queue (append queue (list v)))
+               (semaphore-post queue-count-sema)
+               #t]
+              [else #f])))
     (define/private (dequeue-evt k)
       (wrap-evt queue-count-sema
                 (lambda (ignored)
@@ -66,6 +69,11 @@
     ;; - 'closed-by-reader
     (define state 'open)
 
+    ;; closed? : Boolean
+    ;; Really, closed for sending. Receives may still be in progress.
+    (define/public (closed?)
+      (not (eq? state 'open)))
+
     ;; ============================================================
 
     (define br
@@ -75,10 +83,6 @@
          #:error (lambda (br who fmt . args)
                    (apply h1-error fmt args #:info (hasheq 'code 'read)))
          #:show-data? (lambda (br who) #f))))
-
-    (define/public (live?)
-      (and (let ([in in]) (and in (not (port-closed? in))))
-           (let ([out out]) (and out (not (port-closed? out))))))
 
     (define/private (abandon-in) (abandon-port in))
     (define/private (abandon-out) (abandon-port out))
@@ -113,7 +117,8 @@
              (define resp-bxe (make-box-evt #t))
              (set! send-in-progress? #t)
              (-send-request req hls)
-             (enqueue (sending req resp-bxe))
+             (or (enqueue (sending req resp-bxe))
+                 (connection-closed-error req 'unknown))
              (set! send-in-progress? #f)
              (end-sending)
              resp-bxe]
@@ -147,6 +152,7 @@
       (fprintf out "\r\n")
       (cond [(procedure? data)
              (let ([out out])
+               ;; FIXME: If data throws exception, then close port and bail out.
                (call-with-continuation-barrier
                 (lambda ()
                   (data (λ (bs)
@@ -177,47 +183,74 @@
     (define reader-thread (thread (lambda () (reader))))
 
     (define/private (reader)
+      ;; Waiting for either SR from queue or EOF from server (if in?=#t).
       (let loop ([in? #t])
-        (sync (dequeue-evt (lambda (sr)
-                             (cond [(eof-object? (peek-byte in))
-                                    (abandon/close-after-timeout)]
-                                   [else (reader* sr)])))
+        (sync (dequeue-evt (lambda (sr) (reader/sr sr)))
               (cond [in? (wrap-evt in
                                    (lambda (ignored)
-                                     (cond [(eof-object? (peek-byte in))
-                                            (abandon/close-after-timeout)]
+                                     (cond [(eof-object? (peek-byte in)) (reader/eof #f)]
                                            [else (loop #f)])))]
                     [else never-evt]))))
-    (define/private (reader* sr)
-      (define resp-set? #f)
+
+    ;; Got SR from queue; try to read response (or EOF) from server.
+    (define/private (reader/sr sr)
+      (cond [(eof-object? (peek-byte in)) (reader/eof sr)]
+            [else (reader/sr* sr)]))
+    (define/private (reader/sr* sr)
       (match-define (sending req bxe) sr)
       ((with-handlers ([exn? (lambda (e)
                                (close-from-reader)
-                               (unless resp-set?
-                                 (box-evt-set! bxe (lambda () (raise e))))
+                               (define e*
+                                 (merge-exn e "error reading response from server"
+                                            (hasheq 'request req
+                                                    'version 'http/1.1
+                                                    'received 'yes
+                                                    'code 'error-reading-response)))
+                               (box-evt-set! bxe (lambda () (raise e*)))
                                (lambda () (void)))])
          (define-values (resp close? pump) (read-response req))
          (when close? (abandon-out-from-reader))
          (box-evt-set! bxe (lambda () resp))
-         (set! resp-set? #t)
          (pump)
-         (cond [close? (lambda () (close-from-reader))]
+         (cond [close? (lambda () (reader/close))]
                [else (lambda () (reader))]))))
-    (define/private (abandon/close-after-timeout)
-      (define TIMEOUT 1)
+
+    ;; Got EOF from server at the beginning of a response.
+    (define/private (reader/eof sr)
       (abandon-out-from-reader)
-      (sleep TIMEOUT)
+      (fail-queue 'unknown sr)
+      (close-from-reader))
+
+    ;; Got "Connection: close" from server in previous response.
+    (define/private (reader/close)
+      (fail-queue 'no)
       (close-from-reader))
 
     (define/private (abandon-out-from-reader)
-      (with-lock (set! state 'abandoned-by-reader))
+      (define old-state (with-lock (begin0 state (set! state 'abandoned-by-reader))))
       (abandon-port out)
-      (send parent on-actual-disconnect this))
+      (when (eq? old-state 'open)
+        (send parent on-actual-disconnect this)))
     (define/private (close-from-reader)
-      (with-lock (set! state 'closed-by-reader))
+      (define old-state (with-lock (begin0 state (set! state 'closed-by-reader))))
       (close-output-port out)
       (close-input-port in)
-      (send parent on-actual-disconnect this))
+      (fail-queue 'unknown)
+      (when (eq? old-state 'open)
+        (send parent on-actual-disconnect this)))
+
+    (define/private (fail-queue received [extra-sr #f])
+      (let* ([queue (or (with-lock (begin0 queue (set! queue #f))))]
+             [queue (if extra-sr (cons extra-sr queue) queue)])
+        (for ([sr (in-list queue)])
+          (match-define (sending req resp-bxe) sr)
+          (box-evt-set! resp-bxe (lambda () (connection-closed-error req received))))))
+
+    (define/private (connection-closed-error req received)
+      (h1-error "connection closed by server"
+                #:info (hasheq 'code 'connection-closed-by-server
+                               'request req
+                               'received received)))
 
     ;; ----------------------------------------
     ;; Response (Input)
@@ -293,7 +326,7 @@
                      (values content void #f)]
                     [else (make-pump/content-length br len)]))]
         [else ;; Case 7
-         (log-http-debug "response without Transfer-Encoding or Content-Length")
+         (log-http1-debug "response without Transfer-Encoding or Content-Length")
          (abandon-out-from-reader)
          (make-pump/until-eof in)]))
     ))

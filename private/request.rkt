@@ -2,6 +2,7 @@
 (require racket/match
          net/url-structs
          net/url-string
+         "interfaces.rkt"
          "header.rkt"
          "util.rkt")
 (provide (all-defined-out))
@@ -11,16 +12,18 @@
   (method       ;; Symbol, like 'GET
    url          ;; URL
    header       ;; (Listof HeaderEntry)
-   data         ;; (U #f Bytes (Bytes -> Void))
+   data         ;; (U #f Bytes ((Bytes -> Void) -> Void))
    )
   #:guard (lambda (method loc header data _)
-            (define (bad argn expected)
-              (raise-argument-error 'request expected argn method loc header))
             (define u
               (cond [(string? loc) (check-http-url 'request (string->url loc) loc)]
                     [(url? loc) (check-http-url 'request loc loc)]
-                    [else (bad 1 "(or/c string? url?)")]))
-            (define hs (check-flexible-header-list header))
+                    [else (raise-argument-error 'request "(or/c string? url?)" loc)]))
+            (define hs
+              (with-entry-point 'request
+                (check-flexible-header-list header)))
+            (unless (or (eq? #f data) (bytes? data) (procedure? data))
+              (raise-argument-error 'request "(or/c #f bytes? procedure?)" data))
             (values method u hs data))
   #:transparent)
 

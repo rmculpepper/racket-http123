@@ -51,11 +51,8 @@
 
 (define (ok-http-url? u)
   (match u
-    [(url scheme user host port path-abs? path query fragment)
-     (and (string? scheme)
-          (or (string-ci=? scheme "http") (string-ci=? scheme "https"))
-          (not user)
-          path-abs?)]
+    [(url (? string? scheme) #f (? string? host) port #t path query fragment)
+     (and (normalize-http-scheme scheme) #t)]
     [_ #f]))
 
 ;; RFC 7230, 5.3

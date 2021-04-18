@@ -377,8 +377,11 @@
          (close-output-port user-out)]
         [#f (close-output-port user-out)]
         [(? procedure? put-data)
-         (put-data (lambda (data) (write-bytes data user-out)))
-         (close-output-port user-out)])
+         ;; FIXME: on escape, abort request???
+         (call-with-continuation-barrier
+          (lambda ()
+            (put-data (lambda (data) (write-bytes data user-out)))
+            (close-output-port user-out)))])
       ;; Get response header. (Note: may receive raised-exception instead!)
       (handle-evt
        resp-header-bxe
