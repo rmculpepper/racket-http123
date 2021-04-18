@@ -121,13 +121,17 @@
                  (connection-closed-error req 'unknown))
              (set! send-in-progress? #f)
              (end-sending)
+             (log-http1-debug "request added to queue")
              resp-bxe]
             [else
              (end-sending)
+             (log-http1-debug "not sending request, state = ~s~a"
+                              state (if send-in-progress? " (send in progress failed)" ""))
              #f]))
 
     (define/private (-send-request req hls)
       (match-define (request method u _ data) req)
+      (log-http1-debug "start send request")
       (fprintf out "~a ~a HTTP/1.1\r\n" method (url->bytes u))
       (begin
         ;; RFC 7230 Section 5.4 (Host): The Host header field is required, and
@@ -164,7 +168,8 @@
             [(bytes? data)
              (write-bytes data out)]
             [else (void)])
-      (flush-output out))
+      (flush-output out)
+      (log-http1-debug "end send request"))
 
     (define/private (check-req-header hs)
       (for ([h (in-list hs)])
@@ -197,8 +202,10 @@
       (cond [(eof-object? (peek-byte in)) (reader/eof sr)]
             [else (reader/sr* sr)]))
     (define/private (reader/sr* sr)
+      (log-http1-debug "reading response")
       (match-define (sending req bxe) sr)
       ((with-handlers ([exn? (lambda (e)
+                               (log-http1-debug "error reading response from server: ~e" e)
                                (close-from-reader)
                                (define e*
                                  (merge-exn e "error reading response from server"
@@ -207,9 +214,13 @@
                                                     'received 'yes
                                                     'code 'error-reading-response)))
                                (box-evt-set! bxe (lambda () (raise e*)))
-                               (lambda () (void)))])
+                               (lambda ()
+                                 (log-http1-debug "ending reader loop due to error")
+                                 (void)))])
          (define-values (resp close? pump) (read-response req))
-         (when close? (abandon-out-from-reader))
+         (when close?
+           (log-http1-debug "got Connection:close from server")
+           (abandon-out-from-reader))
          (box-evt-set! bxe (lambda () resp))
          (pump)
          (cond [close? (lambda () (reader/close))]
@@ -217,14 +228,17 @@
 
     ;; Got EOF from server at the beginning of a response.
     (define/private (reader/eof sr)
+      (log-http1-debug "got EOF from server")
       (abandon-out-from-reader)
       (fail-queue 'unknown sr)
-      (close-from-reader))
+      (close-from-reader)
+      (log-http1-debug "ending reader loop due to EOF from server"))
 
     ;; Got "Connection: close" from server in previous response.
     (define/private (reader/close)
       (fail-queue 'no)
-      (close-from-reader))
+      (close-from-reader)
+      (log-http1-debug "ending reader loop due to Connection:close from server"))
 
     (define/private (abandon-out-from-reader)
       (define old-state (with-lock (begin0 state (set! state 'abandoned-by-reader))))
@@ -240,8 +254,9 @@
         (send parent on-actual-disconnect this)))
 
     (define/private (fail-queue received [extra-sr #f])
-      (let* ([queue (or (with-lock (begin0 queue (set! queue #f))))]
+      (let* ([queue (or (with-lock (begin0 queue (set! queue #f))) null)]
              [queue (if extra-sr (cons extra-sr queue) queue)])
+        (log-http1-debug "failing ~s queued requests with status: ~e" (length queue) received)
         (for ([sr (in-list queue)])
           (match-define (sending req resp-bxe) sr)
           (box-evt-set! resp-bxe (lambda () (connection-closed-error req received))))))
@@ -260,6 +275,7 @@
       (define-values (status-line status-version status-code) (read-status-line))
       (define raw-header (read-raw-header))
       (define header (make-header-from-lines raw-header))
+      (log-http1-debug "got header")
       (define no-content? ;; RFC 7230 Section 3.3.3, cases 1 and 2
         (or (eq? method 'HEAD)
             (regexp-match? #rx"^1.." status-code) ;; Informational
@@ -270,6 +286,7 @@
       (check-header method no-content? header)
       (define close?
         (or ;; FIXME: if we requested Connection: close
+            ;; FIXME: more robust value comparison
             (send header has-value? 'connection #"close")))
       (define (make-resp content trailersbxe)
         (new http11-response%
@@ -282,6 +299,7 @@
         (values (make-resp content trailerbxe) close? pump))
       (cond
         [no-content?
+         (log-http1-debug "no content")
          (values (make-resp #f #f) close? void)]
         [else
          (define-values (content pump trailerbxe) (make-content-pump header))
@@ -289,6 +307,7 @@
 
     (define/public (read-status-line)
       (define line (b-read-bytes-line br STATUS-EOL-MODE))
+      (log-http1-debug "got status line: ~e" line)
       (match (regexp-match (rx STATUS-LINE) line)
         [(list _ http-version status-code reason-phrase)
          (values line http-version status-code)]
@@ -318,15 +337,17 @@
       (cond
         ;; Reference: https://tools.ietf.org/html/rfc7230, Section 3.3.3 (Message Body Length)
         [(send header has-value? 'transfer-encoding #"chunked") ;; Case 3
+         (log-http1-debug "reading content with Transfer-Encoding:chunked")
          (make-pump/chunked br)]
         [(send header get-integer-value 'content-length) ;; Case 5
          => (lambda (len)
+              (log-http1-debug "reading content with Content-Length:~a" len)
               (cond [(< len CONTENT-LENGTH-READ-NOW)
                      (define content (b-read-bytes br len))
                      (values content void #f)]
                     [else (make-pump/content-length br len)]))]
         [else ;; Case 7
-         (log-http1-debug "response without Transfer-Encoding or Content-Length")
+         (log-http1-debug "reading content until EOF, no Transfer-Encoding or Content-Length")
          (abandon-out-from-reader)
          (make-pump/until-eof in)]))
     ))
