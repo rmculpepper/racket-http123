@@ -4,7 +4,8 @@
          net/url-string
          "interfaces.rkt"
          "request.rkt"
-         "connection.rkt")
+         "connection.rkt"
+         "util.rkt")
 (provide (all-defined-out))
 
 ;; Add helpers to

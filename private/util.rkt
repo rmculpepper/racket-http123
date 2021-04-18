@@ -1,23 +1,8 @@
 #lang racket/base
-(require racket/contract/base
-         racket/match
+(require racket/match
          net/url-structs
          net/url-string)
-(provide ascii-string?
-         ascii-bytes?
-         (contract-out
-          #:unprotected-submodule unchecked
-          [string->bytes/ascii
-           (->* [string?]
-                [(or/c #f byte?) exact-nonnegative-integer? exact-nonnegative-integer?]
-                bytes?)]
-          [bytes->string/ascii
-           (->* [bytes?]
-                [(or/c #f char?) exact-nonnegative-integer? exact-nonnegative-integer?]
-                string?)]
-          [url->bytes
-           (-> url? ascii-bytes?)]))
-
+(provide (all-defined-out))
 
 ;; ============================================================
 ;; ASCII
@@ -47,17 +32,22 @@
 ;; ============================================================
 ;; URLs
 
-(define (check-http-url who u)
-  (define (bad fmt . args) (apply error who fmt args))
+(define (check-http-url who u [orig u])
+  (define (bad msg) (error who "~a\n  URL: ~e" msg orig))
   (match-define (url scheme user host port path-abs? path query fragment) u)
-  (unless scheme (bad "URL missing scheme"))
-  (unless (or (string-ci=? scheme "http") (string-ci=? scheme "https"))
-    (bad "URL scheme is not \"http\" or \"https\""))
-  (when user (bad "URL contains userinfo"))
-  (unless host (bad "URL missing host"))
-  (unless path-abs? (bad "URL path is not absolute"))
-  ;; just silently ignore fragment
-  (void))
+  (unless scheme (bad "bad URL, missing scheme"))
+  (define scheme* (normalize-http-scheme scheme))
+  (unless scheme* (bad "bad URL, expected \"http\" or \"https\" for scheme"))
+  (when user (bad "bad URL, contains userinfo"))
+  (unless host (bad "bad URL, missing host"))
+  (define host* (string->immutable-string (string-downcase host)))
+  (unless path-abs? (bad "bad URL, path is not absolute"))
+  (url scheme* #f host* port path-abs? path query fragment))
+
+(define (normalize-http-scheme scheme) ;; if good, result is immutable, downcased
+  (cond [(string-ci=? scheme "https") "https"]
+        [(string-ci=? scheme "http") "http"]
+        [else #f]))
 
 (define (ok-http-url? u)
   (match u

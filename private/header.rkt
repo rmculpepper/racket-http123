@@ -159,6 +159,9 @@
                    (hasheq 'who 'make-header-from-lines 'code 'bad-header-field-line))]))))
 
 
+;; ============================================================
+;; Checking FlexibleHeaderList
+
 ;; A HeaderEntry is (list Bytes Bytes) | (list Bytes Bytes 'never-add)
 
 ;; make-header-from-entries : (Listof HeaderEntry) -> header%
@@ -175,11 +178,8 @@
      (values key value)]
     [h (h-error "malformed header field entry\n  header: ~e" h)]))
 
-
 ;; ============================================================
-;; HeaderLines
-
-;; Used to represent request headers (for http11)
+;; FlexibleHeaderList
 
 ;; A FlexibleHeaderList is (Listof FlexibleHeaderField).
 ;; A FlexibleHeaderField is one of
@@ -189,40 +189,43 @@
 ;; FlexibleHeaderKey = Symbol | Bytes | String  -- matching TOKEN
 ;; FlexibleHeaderValue = String | Bytes         -- matching OWS FIELD-VALUE OWS
 
-;; A HeaderLines = (Listof Bytes)
-
-;; normalize-headerlines : FlexibleHeaderList -> HeaderLines
-;; Normalizing involves checking and converting to bytes, not downcasing keys.
-(define (normalize-headerlines hs)
-  (map normalize-header-field hs))
-(define (normalize-header-field h)
-  (match h
+;; check-flexible-header-list : FlexibleHeaderList -> (Listof HeaderEntry)
+(define (check-flexible-header-list hs)
+  (map check-flexible-header-field hs))
+(define (check-flexible-header-field hf)
+  (define (bad) (h-error "bad header field\n  field: ~e" hf))
+  (match hf
     [(list key value)
-     (bytes-append (normalize-key key) #": " (normalize-value value))]
-    [(? bytes)
-     (cond [(regexp-match-exact? (rx HEADER-FIELD) h) h]
-           [else (h-error "bad header field line\n  line: ~e" h)])]
+     (list (check-flexible-header-key key) (check-flexible-header-value value))]
+    [(? bytes?)
+     (match (regexp-match (rx^$ HEADER-FIELD) hf)
+       [(list _ key val)
+        (list (check-flexible-header-key key) (bytes->immutable-bytes val))]
+       [_ (bad)])]
     [(? string?)
-     (cond [(regexp-match-exact? (rx HEADER-FIELD) h) (string->bytes/latin-1 h)]
-           [else (h-error "bad header field line\n  line: ~e" h)])]))
-(define (normalize-key key)
-  (match key
-    [(? bytes? (regexp (rx^$ TOKEN))) key]
-    [(? string? (regexp (rx^$ TOKEN))) (string->bytes/latin-1 key)]
-    [else (h-error "bad header field key\n  key: ~e" key)]))
-(define (normalize-value value)
+     (match (regexp-match (rx^$ HEADER-FIELD) (string->bytes/utf-8 hf))
+       [(list _ key val)
+        (list (check-flexible-header-key key) (bytes->immutable-bytes val))]
+       [_ (bad)])]
+    [_ (bad)]))
+(define (check-flexible-header-key key0)
+  (define (imm bs) (bytes->immutable-bytes bs))
+  (let loop ([key key0])
+    (match key
+      [(? symbol?) (loop (symbol->string key))]
+      [(? bytes? (regexp (rx^$ TOKEN))) (imm key)]
+      [(? string? (regexp (rx^$ TOKEN))) (imm (string->bytes/latin-1 key))]
+      [else (h-error "bad header field key\n  key: ~e" key0)])))
+(define (check-flexible-header-value value)
   (match value
-    [(? string? (regexp (rx^$ (rx OWS (record FIELD-VALUE) OWS))
-                        (list _ field-value)))
-     (string->bytes/latin-1 field-value)]
-    [(? bytes? (regexp (rx^$ (rx OWS (record FIELD-VALUE) OWS))
-                       (list _ field-value)))
-     field-value]
+    [(? bytes? (regexp (rx^$ (rx OWS (record FIELD-VALUE) OWS)) (list _ field-value)))
+     (bytes->immutable-bytes field-value)]
+    [(? string? (regexp (rx^$ (rx OWS (record FIELD-VALUE) OWS)) (list _ field-value)))
+     (bytes->immutable-bytes (string->bytes/latin-1 field-value))]
     [_ (h-error "bad header field value\n  value: ~e" value)]))
 
-(define (headerlines-missing? hs rx)
-  (not (for/or ([h (in-list hs)])
-         (regexp-match? rx h))))
+(define (header-entries-missing? hs key)
+  (not (assoc key hs)))
 
 
 ;; ============================================================
@@ -421,8 +424,12 @@
     te
     trailer))
 
-(define reserved-headerline-rxs
-  '(#rx#"^(?i:Host):"
-    #rx#"^(?i:Content-Length):"
-    #rx#"^(?i:Connection|Keep-Alive|Upgrade):"
-    #rx#"^(?i:Transfer-Encoding|TE|Trailer):"))
+(define reserved-header-keys/bytes
+  '(#"host"
+    #"content-length"
+    #"connection"
+    #"keep-alive"
+    #"upgrade"
+    #"transfer-encoding"
+    #"te"
+    #"trailer"))

@@ -128,16 +128,16 @@
         ;; RFC 7230 Section 5.4 (Host): The Host header field is required, and
         ;; it must be the same as the authority component of the target URI
         ;; (minus userinfo).
-        (fprintf out "Host: ~a\r\n" (url->host-bytes u))
+        (fprintf out "host: ~a\r\n" (url->host-bytes u))
         ;; FIXME: belongs to another layer...
-        (when (headerlines-missing? hls #rx"^(?i:User-Agent:)")
-          (fprintf out "User-Agent: ~a\r\n" default-user-agent))
-        (when (headerlines-missing? hls #rx"^(?i:Accept-Encoding:)")
-          (fprintf out "Accept-Encoding: ~a\r\n" default-accept-encoding))
+        (when (header-entries-missing? hls #"user-agent")
+          (fprintf out "user-agent: ~a\r\n" default-user-agent))
+        (when (header-entries-missing? hls #"(accept-encoding")
+          (fprintf out "accept-encoding: ~a\r\n" default-accept-encoding))
         (cond [(procedure? data)
-               (fprintf out "Transfer-Encoding: chunked\r\n")]
+               (fprintf out "transfer-encoding: chunked\r\n")]
               [(bytes? data)
-               (format "Content-Length: ~a\r\n" (bytes-length data))]
+               (format "content-length: ~a\r\n" (bytes-length data))]
               [else
                ;; If no content data, don't add Content-Length header field.
                ;; FIXME!!!
@@ -160,14 +160,13 @@
             [else (void)])
       (flush-output out))
 
-    (define/private (check-req-header header)
-      (define hls (normalize-headerlines header))
-      (for ([hl (in-list hls)])
-        (for ([rx (in-list reserved-headerline-rxs)])
-          (when (regexp-match? rx hl)
-            (h1-error "request contains header field reserved for user-agent\n  field: ~e" hl
-                      (hasheq 'code 'reserved-request-header-field)))))
-      hls)
+    (define/private (check-req-header hs)
+      (for ([h (in-list hs)])
+        (match-define (list* k v _) h)
+        (when (member k reserved-header-keys/bytes)
+          (h1-error "request contains header field reserved for user-agent\n  field: ~e" h
+                    (hasheq 'code 'reserved-request-header-field))))
+      hs)
 
     (define/private (url->host-bytes u)
       (send parent url->host-bytes u))
