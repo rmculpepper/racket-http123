@@ -6,10 +6,10 @@
 
 ;; FIXME: move to response layer
 
-;; get-decode-mode : Headers -> (U 'gzip 'deflate #f)
-(define (get-decode-mode headers)
-  (cond [(send headers has-value? 'content-encoding #"gzip") 'gzip]
-        [(send headers has-value? 'content-encoding #"deflate") 'deflate]
+;; get-decode-mode : Header -> (U 'gzip 'deflate #f)
+(define (get-decode-mode header)
+  (cond [(send header has-value? 'content-encoding #"gzip") 'gzip]
+        [(send header has-value? 'content-encoding #"deflate") 'deflate]
         [else #f]))
 
 (define (make-decode-input-wrapper decode-mode decode-in)

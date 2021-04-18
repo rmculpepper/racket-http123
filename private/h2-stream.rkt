@@ -197,9 +197,9 @@
       (void))
 
     (define/public (handle-push_promise-payload flags payload)
-      (match-define (fp:push_promise padlen promised-streamid headers) payload)
+      (match-define (fp:push_promise padlen promised-streamid header) payload)
       (check-state 'push_promise)
-      (s2:handle-push_promise promised-streamid headers))
+      (s2:handle-push_promise promised-streamid header))
 
     (define/public (handle-rst_stream errorcode)
       (check-state 'rst_stream)
@@ -337,12 +337,12 @@
 
     (define/private (initiate-request req send-req?)
       (cond [send-req?
-             (match-define (request method url headers data) req)
+             (match-define (request method url header data) req)
              (log-http2-debug "#~s initiating ~s request" streamid method)
              ;; FIXME: for http2, data must be #f or bytes or 'delayed
-             (define more-headers (make-http2-headers method url))
-             (define enc-headers (encode-headers (append more-headers headers)
-                                                 (send conn get-sending-dt)))
+             (define pseudo-header (make-pseudo-header method url))
+             (define enc-header (encode-header (append pseudo-header header)
+                                               (send conn get-sending-dt)))
              ;; FIXME: split into frames if necessary
              (define no-content?
                (or (eq? data #f)
@@ -351,7 +351,7 @@
               (frame type:HEADERS
                      (+ flag:END_HEADERS (if no-content? flag:END_STREAM 0))
                      streamid
-                     (fp:headers 0 0 0 enc-headers)))
+                     (fp:headers 0 0 0 enc-header)))
              ;; FIXME: if small data, send immediately (must check out-flow-window, though)
              (if no-content?
                  (check-s2-state 'user-request+end)
@@ -359,9 +359,9 @@
             [else
              (check-s2-state 'user-request+end)]))
 
-    ;; FIXME: pseudo-headers MUST appear first, contiguous
+    ;; FIXME: pseudo-header fields MUST appear first, contiguous
     ;; FIXME: 8.1.2.2 forbids Connection header, others
-    (define/private (make-http2-headers method u)
+    (define/private (make-pseudo-header method u)
       (list (list #":method" (symbol->bytes method))
             (list #":scheme" (string->bytes/utf-8 (url-scheme u)))
             (list #":authority" (url-authority->bytes u)) ;; SHOULD use instead of Host
@@ -402,14 +402,18 @@
     (define-values (user-in out-to-user raise-user-exn) (make-wrapped-pipe))
     (define user-in-last-position (file-position user-in))
     (define user-in-last-progress-evt (port-progress-evt user-in)) ;; progress or close!
+    ;; Stage 4.
+    (define trailerbxe (make-box-evt #t))
 
     (define/public (get-user-communication)
       (values user-out
               resp-header-bxe
-              user-in))
+              user-in
+              trailerbxe))
 
     (define/private (send-exn-to-user e)
       (box-evt-set! resp-header-bxe (lambda () (raise e)))
+      (box-evt-set! trailerbxe (lambda () (raise e)))
       (raise-user-exn e))
 
     ;; ----------------------------------------
@@ -420,13 +424,13 @@
       (when end? (close-output-port out-to-user))
       (check-s2-state (if end? 'data+end 'data)))
 
-    (define/public (s2:handle-headers headers end?)
-      (log-http2-debug "#~s returning headers to user" streamid)
-      (box-evt-set! resp-header-bxe (lambda () headers))
+    (define/public (s2:handle-headers header end?)
+      (log-http2-debug "#~s returning header to user" streamid)
+      (box-evt-set! resp-header-bxe (lambda () header))
       (check-s2-state (if end? 'headers+end 'headers)))
 
-    (define/public (s2:handle-push_promise promised-streamid headers)
-      (send conn handle-push_promise promised-streamid headers))
+    (define/public (s2:handle-push_promise promised-streamid header)
+      (send conn handle-push_promise promised-streamid header))
 
     (define/public (s2:handle-rst_stream errorcode)
       (send-exn-to-user

@@ -6,7 +6,7 @@
 (struct request
   (method       ;; Symbol, like 'GET
    url          ;; URL
-   headers      ;; (Listof Bytes)
+   header       ;; (Listof Bytes)
    data         ;; (U Bytes (Bytes -> Void) 'removed)
    ) #:prefab)
 
@@ -16,7 +16,7 @@
 (define (request:can-replay? req)
   ;; FIXME: depends on policy, belongs in connection?
   (match req
-    [(request method url headers data)
+    [(request method url header data)
      (and (method:idempotent? method)
           (or (eq? data #f) (bytes? data)))]))
 

@@ -10,7 +10,7 @@
 ;; Add helpers to
 ;; - create a client that uses a single connection
 ;;   (eg, for CONNECT tunneling)
-;; - specialize a client (shared connection table) to add different default headers, etc
+;; - specialize a client (shared connection table) to add different default header, etc
 ;; - add url-for-connection hook, takes request loc, produces url to connect to
 
 ;; generally, need to figure out requirements for proxies
@@ -59,13 +59,13 @@
     ;; Reference: https://tools.ietf.org/html/rfc7231
 
     (define-syntax-rule (make-method method)
-      (lambda (loc #:headers [headers null] #:data [data #f])
-        (do-method 'method loc headers data)))
+      (lambda (loc #:header [header null] #:data [data #f])
+        (do-method 'method loc header data)))
     (define-syntax-rule (make-method/no-data method)
-      (lambda (loc #:headers [headers null])
-        (do-method 'method loc headers #f)))
-    (define/public (do-method method loc headers data)
-      (define req (request method (->url loc) headers data))
+      (lambda (loc #:header [header null])
+        (do-method 'method loc header #f)))
+    (define/public (do-method method loc header data)
+      (define req (request method (->url loc) header data))
       (sync-request req))
 
     (define/public GET (make-method 'GET))
@@ -81,6 +81,8 @@
       ??)
     ))
 
+(define http-client%
+  (client-mixin connection-manager%))
 
 
 (define (default-port-for-scheme scheme)

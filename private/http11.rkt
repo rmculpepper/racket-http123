@@ -1,12 +1,14 @@
 #lang racket/base
 (require racket/class
          racket/match
+         racket/promise
          net/url-string
          binaryio/reader
          "interfaces.rkt"
          "header.rkt"
          "regexp.rkt"
          "io.rkt"
+         "util.rkt"
          "request.rkt"
          "response.rkt")
 (provide (all-defined-out))
@@ -105,7 +107,7 @@
     ;; open-request : Request -> BoxEvt or #f
     ;; Returns evt if request sent and queued, #f if cannot send in current state.
     (define/public (open-request req)
-      (define hls (check-req-headers (request-headers req)))
+      (define hls (check-req-header (request-header req)))
       (start-sending)
       (cond [(and (eq? state 'open) (not send-in-progress?))
              (define resp-bxe (make-box-evt #t))
@@ -123,9 +125,9 @@
       (match-define (request method u _ data) req)
       (fprintf out "~a ~a HTTP/1.1\r\n" method (url->bytes u))
       (begin
-        ;; RFC 7230 Section 5.4 (Host): The Host header is required,
-        ;; and it must be the same as the authority component of the
-        ;; target URI (minus userinfo).
+        ;; RFC 7230 Section 5.4 (Host): The Host header field is required, and
+        ;; it must be the same as the authority component of the target URI
+        ;; (minus userinfo).
         (fprintf out "Host: ~a\r\n" (url->host-bytes u))
         ;; FIXME: belongs to another layer...
         (when (headerlines-missing? hls #rx"^(?i:User-Agent:)")
@@ -137,7 +139,7 @@
               [(bytes? data)
                (format "Content-Length: ~a\r\n" (bytes-length data))]
               [else
-               ;; If no content data, don't add Content-Length header.
+               ;; If no content data, don't add Content-Length header field.
                ;; FIXME!!!
                (void)]))
       (for ([hl (in-list hls)])
@@ -158,13 +160,13 @@
             [else (void)])
       (flush-output out))
 
-    (define/private (check-req-headers headers)
-      (define hls (normalize-headerlines headers))
+    (define/private (check-req-header header)
+      (define hls (normalize-headerlines header))
       (for ([hl (in-list hls)])
         (for ([rx (in-list reserved-headerline-rxs)])
           (when (regexp-match? rx hl)
-            (h1-error "request contains header reserved for user-agent\n  header: ~e" hl
-                      (hasheq 'code 'reserved-request-header)))))
+            (h1-error "request contains header field reserved for user-agent\n  field: ~e" hl
+                      (hasheq 'code 'reserved-request-header-field)))))
       hls)
 
     (define/private (url->host-bytes u)
@@ -224,8 +226,8 @@
     (define/private (read-response req)
       (define method (request-method req))
       (define-values (status-line status-version status-code) (read-status-line))
-      (define raw-headers (read-raw-headers))
-      (define headers (make-headers-from-lines raw-headers))
+      (define raw-header (read-raw-header))
+      (define header (make-header-from-lines raw-header))
       (define no-content? ;; RFC 7230 Section 3.3.3, cases 1 and 2
         (or (eq? method 'HEAD)
             (regexp-match? #rx"^1.." status-code) ;; Informational
@@ -233,24 +235,25 @@
             (regexp-match? #rx"^304" status-code) ;; Not Modified
             (and (eq? method 'CONNECT)
                  (regexp-match? #rx"^2.." status-code))))
-      (check-headers method no-content? headers)
+      (check-header method no-content? header)
       (define close?
         (or ;; FIXME: if we requested Connection: close
-            (send headers has-value? 'connection #"close")))
-      (define (make-resp content)
+            (send header has-value? 'connection #"close")))
+      (define (make-resp content trailersbxe)
         (new http11-response%
              (status-line status-line)
              (status-code (string->number (bytes->string/latin-1 status-code)))
-             (headers headers)
-             (content content)))
-      (define (return content pump)
-        (values (make-resp content) close? pump))
+             (header header)
+             (content content)
+             (trailerbxe trailersbxe)))
+      (define (return content pump trailerbxe)
+        (values (make-resp content trailerbxe) close? pump))
       (cond
         [no-content?
-         (values (make-resp #f) close? void)]
+         (values (make-resp #f #f) close? void)]
         [else
-         (define-values (content pump) (make-content-pump headers))
-         (values (make-resp content) close? pump)]))
+         (define-values (content pump trailerbxe) (make-content-pump header))
+         (values (make-resp content trailerbxe) close? pump)]))
 
     (define/public (read-status-line)
       (define line (b-read-bytes-line br STATUS-EOL-MODE))
@@ -260,41 +263,40 @@
         [#f (h1-error "expected status line from server\n  got: ~e" line
                       #:info (hasheq 'code 'bad-status-line))]))
 
-    (define/public (read-raw-headers)
+    (define/public (read-raw-header)
       (define next (b-read-bytes-line br HEADER-EOL-MODE))
       (cond [(equal? next #"") null]
-            [else (cons next (read-raw-headers))]))
+            [else (cons next (read-raw-header))]))
 
-    (define/private (check-headers method no-content? headers)
-      (when (send headers has-key? 'content-length)
-        (send headers check-value 'content-length bytes->nat "nonnegative integer"))
-      (when (send headers has-key? 'transfer-encoding)
-        (send headers check-value 'transfer-encoding
+    (define/private (check-header method no-content? header)
+      (when (send header has-key? 'content-length)
+        (send header check-value 'content-length bytes->nat "nonnegative integer"))
+      (when (send header has-key? 'transfer-encoding)
+        (send header check-value 'transfer-encoding
               (lambda (b) (equal? b #"chunked"))
               (format "~s" #"chunked")))
       ;; FIXME: others?
       (void))
 
-    ;; make-content-pump : Headers -> (values Content (-> Void))
+    ;; make-content-pump : Header -> (values Content (-> Void))
     ;; The pump procedure can raise an exception (for example, to signal the
     ;; server has closed the connection), but if it does, it must also propagate
     ;; it to the content result (usually a wrapped input port).
-    (define/private (make-content-pump headers)
+    (define/private (make-content-pump header)
       (cond
         ;; Reference: https://tools.ietf.org/html/rfc7230, Section 3.3.3 (Message Body Length)
-        [(send headers has-value? 'transfer-encoding #"chunked") ;; Case 3
+        [(send header has-value? 'transfer-encoding #"chunked") ;; Case 3
          (make-pump/chunked br)]
-        [(send headers get-integer-value 'content-length) ;; Case 5
+        [(send header get-integer-value 'content-length) ;; Case 5
          => (lambda (len)
               (cond [(< len CONTENT-LENGTH-READ-NOW)
                      (define content (b-read-bytes br len))
-                     (values content void)]
+                     (values content void #f)]
                     [else (make-pump/content-length br len)]))]
         [else ;; Case 7
          (log-http-debug "response without Transfer-Encoding or Content-Length")
          (abandon-out-from-reader)
          (make-pump/until-eof in)]))
-
     ))
 
 ;; ------------------------------------------------------------
@@ -303,12 +305,13 @@
 (define CHUNKED-EOL-MODE 'return-linefeed)
 (define CONTENT-LENGTH-READ-NOW (expt 2 20)) ;; FIXME
 
-(define (make-pump proc)
+(define (make-pump proc [trailersbxe #f])
   (define-values (wrapped-user-in out-to-user raise-user-exn) (make-wrapped-pipe))
   (values wrapped-user-in
           (lambda ()
             (with-handlers ([exn? (lambda (e) (raise-user-exn e) (raise e))])
-              (proc out-to-user)))))
+              (proc out-to-user)))
+          trailersbxe))
 
 (define (make-pump/content-length br len)
   (define (forward/content-length out-to-user)
@@ -327,6 +330,7 @@
   (make-pump forward/until-eof))
 
 (define (make-pump/chunked br)
+  (define trailerbxe (make-box-evt #t))
   (define (forward/chunked out-to-user)
     (define (read-chunk-size)
       (define line (b-read-bytes-line br CHUNKED-EOL-MODE))
@@ -339,24 +343,22 @@
         (unless (equal? crlf #"\r\n")
           (h1-error "expected CRLF after chunk\n  received: ~e" crlf
                     #:info (hasheq 'received 'yes 'code 'bad 'chunked-transfer)))))
-    (define (read/discard-trailer)
+    (define (read-trailer)
       (define line (b-read-bytes-line br CHUNKED-EOL-MODE))
-      (unless (equal? line #"") (read/discard-trailer)))
+      (cond [(equal? line #"") null]
+            [else (cons line (read-trailer))]))
     (let loop ()
       (define chunk-size (read-chunk-size))
       (cond [(zero? chunk-size)
-             (read/discard-trailer)
+             (let ([trailers (read-trailer)])
+               (define p (delay (make-header-from-lines trailers)))
+               (box-evt-set! trailerbxe (lambda () (force p))))
              (close-output-port out-to-user)]
             [else
              (define chunk-data (b-read-bytes br chunk-size))
              (write-bytes chunk-data out-to-user)
              (expect-crlf)
              (loop)])))
-  (make-pump forward/chunked))
+  (make-pump forward/chunked trailerbxe))
 
 ;; ------------------------------------------------------------
-
-;; FIXME: remove fragment, etc
-(define (url->bytes u)
-  ;; FIXME: UTF-8 ???
-  (string->bytes/utf-8 (url->string u)))

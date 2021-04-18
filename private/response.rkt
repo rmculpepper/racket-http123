@@ -10,15 +10,16 @@
 (define http-response%
   (class* object% (class-printable<%>)
     (init-field status-code     ;; Nat
-                headers         ;; headers%
-                content)        ;; Bytes or InputPort
+                header          ;; header%
+                content         ;; Bytes or InputPort
+                trailerbxe)     ;; #f or (BoxEvt header%)
     (init [handle-content-encoding? #t])
     (super-new)
 
     (define/public (get-status-code) status-code)
     (define/public (get-status-class)
       (status-code->class status-code))
-    (define/public (get-headers) headers)
+    (define/public (get-header) header)
     (define/public (get-content) content)
     (abstract get-version)
 
@@ -31,10 +32,10 @@
     (define/public (get-content-encoding)
       ;; FIXME: could extend to Content-Encoding lists, remove known
       (cond [content-decoded #f]
-            [else (send headers get-value 'content-encoding)]))
+            [else (send header get-value 'content-encoding)]))
 
     (define/public (handle-content-encoding)
-      (define decode-mode (get-decode-mode headers))
+      (define decode-mode (get-decode-mode header))
       (define (get-content-in)
         (if (bytes? content) (open-input-bytes content) content))
       (case decode-mode
@@ -48,8 +49,8 @@
     (define/public (get-printing-classname)
       'http-response%)
     (define/public (get-printing-components)
-      (values '(status-code headers content)
-              (list status-code headers content)
+      (values '(status-code header content)
+              (list status-code header content)
               #t))
     ))
 

@@ -5,7 +5,8 @@
          racket/list
          racket/symbol
          "interfaces.rkt"
-         "regexp.rkt")
+         "regexp.rkt"
+         "util.rkt")
 (provide (all-defined-out))
 
 ;; References:
@@ -17,20 +18,25 @@
            (header-key-name? (symbol->immutable-string v)))))
 
 ;; ============================================================
-;; Headers object
+;; Header object
 
-;; Used to represent response headers.
+;; A Header is an instance of header<%>.
+;; Used to represent response header (and trailer).
 
-;; A Headers is an instance of headers<%>.
+;; Notes on terminology used by RFC 7230:
+;; - header - for entire thing (not "headers")
+;; - header field - one line / mapping
+;; - field-name - left-hand side -- we use "key" instead
+;; - field-value - right-hand side
 
-(define headers<%>
+(define header<%>
   (interface ()
-    [get-headers
-     (->m (hash/c header-key-symbol? (or/c bytes? (listof bytes?))))]
-    [get-headers/pairs
-     (->m (listof (cons/c bytes? bytes?)))]
-    [get-headers/lines
-     (->m (listof bytes?))]
+    [get-header-table
+     (->m (hash/c symbol? (or/c bytes? (listof bytes?))))]
+    [get-header-entries
+     (->*m [] [boolean?] (listof (list/c bytes? bytes?)))]
+    [get-header-lines
+     (->*m [] [boolean?] (listof bytes?))]
     [has-key?
      (->m header-key-symbol? boolean?)]
     [get-values
@@ -49,30 +55,31 @@
 
 ;; ----------------------------------------
 
-(define headers%
-  (class* object% (headers<%> class-printable<%>)
-    (init-field [headers (make-hasheq)]) ;; Hasheq[Symbol => (U Bytes (Listof Bytes))]
+(define header%
+  (class* object% (header<%> class-printable<%>)
+    (init-field [table (make-hasheq)]) ;; Hasheq[Symbol => (U Bytes (Listof Bytes))]
     (super-new)
 
-    (define/public (get-headers) headers)
+    (define/public (get-header-table)
+      (hash-copy table))
 
-    (define/public (get-headers/pairs [combine? #t])
-      (for*/list ([(k vs) (in-hash headers)]
+    (define/public (get-header-entries [combine? #f])
+      (for*/list ([(k vs) (in-hash table)]
                   [v (in-list (if (list? vs)
                                   (if combine? (list (bytes-join vs #", ")) vs)
                                   (list vs)))])
-        (cons (header-key->bytes k) v)))
+        (list (header-key->bytes k) v)))
 
-    (define/public (get-headers/lines [combine? #t])
-      (for/list ([p (in-list (get-headers/pairs combine?))])
-        (match-define (cons k v) p)
+    (define/public (get-header-lines [combine? #f])
+      (for/list ([p (in-list (get-header-entries combine?))])
+        (match-define (list k v) p)
         (bytes-append k #": " v)))
 
     (define/public (has-key? key)
-      (hash-has-key? headers key))
+      (hash-has-key? table key))
 
     (define/public (get-values key)
-      (define vs (hash-ref headers key #f))
+      (define vs (hash-ref table key #f))
       (cond [(list? vs) vs]
             [(bytes? vs) (list vs)]
             [else #f]))
@@ -80,14 +87,14 @@
     ;; Warning about automatically joining list-valued headers:
     ;; Set-Cookie is just strange; see RFC 7230 Section 3.2.2 (Note).
     (define/public (get-value key)
-      (define v (hash-ref headers key #f))
+      (define v (hash-ref table key #f))
       (cond [(list? v) (bytes-join v #", ")]
             [(bytes? v) v]
             [else #f]))
 
     (define/public (get-ascii-string key)
       (define v (get-value key))
-      (and v (regexp-match? #px#"^[[:ascii:]]*$" v) (bytes->string/latin-1 v)))
+      (and v (ascii-bytes? v) (bytes->string/ascii v)))
 
     (define/public (get-integer-value key) ;; -> Int or #f
       (define v (get-ascii-string key))
@@ -103,61 +110,61 @@
     (define/public (check-value key predicate [description #f])
       (define v (get-value key))
       (unless (predicate v)
-        (h-error "bad header value\n  header: ~e\n  expected: ~a\n  got: ~e"
+        (h-error "bad header field value\n  key: ~e\n  expected: ~a\n  got: ~e"
                  key (or description (object-name predicate)) v
-                 #:info (hasheq 'code 'bad-header-value))))
+                 #:info (hasheq 'code 'bad-header-field-value))))
 
     (define/public (remove! key)
-      (hash-remove! headers key))
+      (hash-remove! table key))
 
     ;; ----
 
     (define/public (get-printing-classname)
-      'headers%)
+      'header%)
     (define/public (get-printing-components)
-      (values '(headers) (list headers) #f))
+      (values '(table) (list table) #f))
     ))
 
 ;; ----------------------------------------
 
-;; make-headers-from-list : (Listof X) (X -> (values HeaderKey HeaderValueBytes))
-;;                       -> headers%
-(define (make-headers-from-list raw-headers get-kv)
-  (define headers (make-hasheq))
+;; make-header-from-list : (Listof X) (X -> (values HeaderKey HeaderValueBytes))
+;;                      -> header%
+(define (make-header-from-list raw-header get-kv)
+  (define table (make-hasheq))
   (define list-valued (make-hasheq))
-  (for ([raw-header (in-list raw-headers)])
-    (define-values (key-bs val-bs) (get-kv raw-header))
+  (for ([raw-field (in-list raw-header)])
+    (define-values (key-bs val-bs) (get-kv raw-field))
     (define key (or (header-key->symbol key-bs #t)
-                    (h-error "bad header key\n  key: ~e" key-bs
-                             (hasheq 'who 'make-headers-from-list 'code 'bad-header-key))))
-    (cond [(hash-ref headers key #f)
+                    (h-error "bad header field key\n  key: ~e" key-bs
+                             (hasheq 'who 'make-headers-from-list 'code 'bad-header-field-key))))
+    (cond [(hash-ref table key #f)
            => (lambda (old-v)
                 (define old-v* (if (bytes? old-v) (list old-v) old-v))
                 (define new-v (cons val-bs old-v*))
-                (hash-set! headers key new-v)
+                (hash-set! table key new-v)
                 (hash-set! list-valued key #t))]
-          [else (hash-set! headers key val-bs)]))
+          [else (hash-set! table key val-bs)]))
   (for ([k (in-hash-keys list-valued)])
-    (hash-set! headers k (reverse (hash-ref headers k))))
-  (new headers% (headers headers)))
+    (hash-set! table k (reverse (hash-ref table k))))
+  (new header% (table table)))
 
-;; make-headers-from-lines : (Listof Bytes) -> headers%
-(define (make-headers-from-lines raw-headers)
-  (make-headers-from-list
-   raw-headers
-   (lambda (raw-header)
-     (match (regexp-match (rx^$ HEADER) raw-header)
+;; make-header-from-lines : (Listof Bytes) -> headers%
+(define (make-header-from-lines raw-header)
+  (make-header-from-list
+   raw-header
+   (lambda (line)
+     (match (regexp-match (rx^$ HEADER-FIELD) line)
        [(list _ key-bs val-bs) (values key-bs val-bs)]
-       [_ (h-error "malformed header line\n  line: ~e" raw-header
-                   (hasheq 'who 'make-headers-from-lines 'code 'bad-header-line))]))))
+       [_ (h-error "malformed header field line\n  line: ~e" line
+                   (hasheq 'who 'make-header-from-lines 'code 'bad-header-field-line))]))))
 
 
 ;; A HeaderEntry is (list Bytes Bytes) | (list Bytes Bytes 'never-add)
 
-;; make-headers-from-entries : (Listof HeaderEntry) -> headers%
+;; make-header-from-entries : (Listof HeaderEntry) -> header%
 ;; FIXME: preserve 'never-add ??
-(define (make-headers-from-entries entries)
-  (make-headers-from-list entries check-header-entry))
+(define (make-header-from-entries entries)
+  (make-header-from-list entries check-header-entry))
 
 ;; check-header-entry : Any -> (values HeaderKeyBytes HeaderValueBytes)
 (define (check-header-entry entry)
@@ -166,7 +173,7 @@
             (? bytes? (and (regexp (rx^$ FIELD-VALUE)) value))
             (? (lambda (v) (member v '((never-add) ())))))
      (values key value)]
-    [h (h-error "malformed header entry\n  header: ~e" h)]))
+    [h (h-error "malformed header field entry\n  header: ~e" h)]))
 
 
 ;; ============================================================
@@ -174,8 +181,8 @@
 
 ;; Used to represent request headers (for http11)
 
-;; A FlexibleHeaderList is (Listof FlexibleHeader).
-;; A FlexibleHeader is one of
+;; A FlexibleHeaderList is (Listof FlexibleHeaderField).
+;; A FlexibleHeaderField is one of
 ;; - (list FlexibleHeaderKey FlexibleHeaderValue)
 ;; - Bytes                  -- matching HEADER
 ;; - String                 -- matching HEADER
@@ -187,25 +194,22 @@
 ;; normalize-headerlines : FlexibleHeaderList -> HeaderLines
 ;; Normalizing involves checking and converting to bytes, not downcasing keys.
 (define (normalize-headerlines hs)
-  (map normalize-header hs))
-(define (normalize-header h)
+  (map normalize-header-field hs))
+(define (normalize-header-field h)
   (match h
     [(list key value)
      (bytes-append (normalize-key key) #": " (normalize-value value))]
     [(? bytes)
-     (cond [(regexp-match-exact? (rx HEADER) h) h]
-           [else (h-error "bad header line\n  header: ~e" h
-                          #:info (hasheq 'who 'normalize-header))])]
+     (cond [(regexp-match-exact? (rx HEADER-FIELD) h) h]
+           [else (h-error "bad header field line\n  line: ~e" h)])]
     [(? string?)
-     (cond [(regexp-match-exact? (rx HEADER) h) (string->bytes/latin-1 h)]
-           [else (h-error "bad header line\n  header: ~e" h
-                          #:info (hasheq 'who 'normalize-header))])]))
+     (cond [(regexp-match-exact? (rx HEADER-FIELD) h) (string->bytes/latin-1 h)]
+           [else (h-error "bad header field line\n  line: ~e" h)])]))
 (define (normalize-key key)
   (match key
     [(? bytes? (regexp (rx^$ TOKEN))) key]
     [(? string? (regexp (rx^$ TOKEN))) (string->bytes/latin-1 key)]
-    [else (h-error "bad header key\n  key: ~e" key
-                   #:info (hasheq 'who 'normalize-header))]))
+    [else (h-error "bad header field key\n  key: ~e" key)]))
 (define (normalize-value value)
   (match value
     [(? string? (regexp (rx^$ (rx OWS (record FIELD-VALUE) OWS))
@@ -214,8 +218,7 @@
     [(? bytes? (regexp (rx^$ (rx OWS (record FIELD-VALUE) OWS))
                        (list _ field-value)))
      field-value]
-    [_ (h-error "bad header value\n  value: ~e" value
-                #:info (hasheq 'who 'normalize-header))]))
+    [_ (h-error "bad header field value\n  value: ~e" value)]))
 
 (define (headerlines-missing? hs rx)
   (not (for/or ([h (in-list hs)])
@@ -234,7 +237,7 @@
 (define-rx FIELD-VALUE (* FIELD-CONTENT))
 
 (define-rx HEADER-START (rx (record TOKEN) ":"))
-(define-rx HEADER (rx HEADER-START OWS (record FIELD-VALUE) OWS))
+(define-rx HEADER-FIELD (rx HEADER-START OWS (record FIELD-VALUE) OWS))
 
 (define-rx TOKEN+ (rx TOKEN (* OWS "," OWS TOKEN)))
 
@@ -251,7 +254,7 @@
         [(and (string? key) (header-key-name-ci? key))
          (string->symbol (string-downcase key))]
         [fail-ok? #f]
-        [else (h-error "bad header key\n  key: ~e" key
+        [else (h-error "bad header field key\n  key: ~e" key
                        #:info (hasheq 'who 'header-key->symbol))]))
 
 ;; header-key->bytes : HeaderKey -> Bytes, or #f if fail-ok?
@@ -265,7 +268,7 @@
           [(and (bytes? key) (header-key-name-ci? key))
            (string->bytes/latin-1 (string-downcase (bytes->string/latin-1 key)))]
           [fail-ok? #f]
-          [else (h-error "bad header key\n  key: ~e" key0
+          [else (h-error "bad header field key\n  key: ~e" key0
                          #:info (hasheq 'who 'header-key->bytes))])))
 
 (define (header-key-name? s)
@@ -408,7 +411,7 @@
 
 ;; ============================================================
 
-(define reserved-headers
+(define reserved-header-keys
   '(host
     content-length
     connection

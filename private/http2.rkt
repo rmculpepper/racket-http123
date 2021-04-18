@@ -173,7 +173,7 @@
             [else (handle-frame* fr)]))
 
     (define/public (handle-multipart-frames frs)
-      (define (get-headers streamid first-headerbf)
+      (define (get-header streamid first-headerbf)
         (define rest-headerbfs
           (for/list ([fr (in-list (cdr frs))])
             (fp:continuation-headerbf (frame-payload fr))))
@@ -185,18 +185,18 @@
                          #:raise (merge-exn e "error decoding headers"
                                             (hasheq 'code 'malformed-headers
                                                     'received 'yes))))
-          (decode-headers headerb reading-dt)))
+          (decode-header headerb reading-dt)))
       (match (car frs)
         [(frame (== type:HEADERS) flags streamid
                 (fp:headers padlen streamdep weight headerbf))
-         (define headers (get-headers streamid headerbf))
+         (define header (get-header streamid headerbf))
          (send (get-stream streamid) handle-headers-payload
-               flags (fp:headers padlen streamdep weight headers))]
+               flags (fp:headers padlen streamdep weight header))]
         [(frame (== type:PUSH_PROMISE) flags streamid
                 (fp:push_promise padlen promised-streamid headerbf))
-         (define headers (get-headers streamid headerbf))
+         (define header (get-header streamid headerbf))
          (send (get-stream streamid) handle-push_promise-payload
-               flags (fp:push_promise padlen promised-streamid headers))]))
+               flags (fp:push_promise padlen promised-streamid header))]))
 
     (define/public (handle-frame* fr)
       (match fr
@@ -366,8 +366,8 @@
     ;; called by user thread
     (define/public (open-request req)
       (define stream (new-client-stream req #t))
-      ;; Stream automatically sends request headers.
-      (define-values (user-out resp-headers-bxe user-in)
+      ;; Stream automatically sends request header.
+      (define-values (user-out resp-header-bxe user-in trailerbxe)
         (send stream get-user-communication))
       ;; User thread writes request content.
       ;; FIXME: optimize, send short data bytes on stream initialization
@@ -381,22 +381,23 @@
          (close-output-port user-out)])
       ;; Get response header. (Note: may receive raised-exception instead!)
       (handle-evt
-       resp-headers-bxe
+       resp-header-bxe
        (lambda (header-entries)
-         (define headers
+         (define header
            (with-handler (lambda (e)
-                           (h2-error "error processing headers"
+                           (h2-error "error processing header"
                                      #:info (hasheq 'received 'yes 'wrapped-exn e)))
-             (make-headers-from-entries header-entries)))
-         (unless (send headers value-matches? ':status #rx#"[1-5][0-9][0-9]")
+             (make-header-from-entries header-entries)))
+         (unless (send header value-matches? ':status #rx#"[1-5][0-9][0-9]")
            (h2-error "bad or missing status from server"
-                     #:info (hasheq 'received 'yes 'code 'bad-status 'heades headers)))
-         (define status (send headers get-integer-value ':status))
-         (send headers remove! ':status)
+                     #:info (hasheq 'received 'yes 'code 'bad-status 'header header)))
+         (define status (send header get-integer-value ':status))
+         (send header remove! ':status)
          (new http2-response%
               (status-code status)
-              (headers headers)
-              (content user-in)))))
+              (header header)
+              (content user-in)
+              (trailerbxe trailerbxe)))))
 
     ;; ========================================
 

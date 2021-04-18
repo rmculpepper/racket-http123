@@ -16,22 +16,22 @@
 
 ;; HeaderEntry = (list Bytes Bytes) | (list Bytes Bytes 'never-add)
 
-;; encode-headers : (Listof HeaderEntry) State -> Void
-(define (encode-headers headers dt #:who [who 'encode-headers]
-                        #:huffman? [huffman? #t]
-                        #:overrides [overrides #hash()])
+;; encode-header : (Listof HeaderEntry) State -> Void
+(define (encode-header hfields dt #:who [who 'encode-header]
+                       #:huffman? [huffman? #t]
+                       #:overrides [overrides #hash()])
   (define out (open-output-bytes))
-  (define header-reps (encode-headers* headers dt overrides #:who who))
-  (for ([hrep (in-list header-reps)])
+  (define hfield-reps (encode-header* hfields dt overrides #:who who))
+  (for ([hrep (in-list hfield-reps)])
     (write-header-rep out hrep huffman?))
   (get-output-bytes out))
 
-(define (encode-headers* headers dt [overrides #hash()] #:who [who 'encode-headers*])
-  (for/list ([header (in-list headers)])
-    (encode-header who header dt overrides)))
+(define (encode-header* hfields dt [overrides #hash()] #:who [who 'encode-header*])
+  (for/list ([hfield (in-list hfields)])
+    (encode-hfield who hfield dt overrides)))
 
-(define (encode-header who header dt overrides)
-  (match header
+(define (encode-hfield who hfield dt overrides)
+  (match hfield
     [(list key value 'never-add)
      (header:literal 'never-add key value)]
     [(list key value)
@@ -51,19 +51,19 @@
               [else
                (header:literal 'no-add (or key-index key) value)])])]))
 
-;; decode-headers : Bytes DTable -> (Listof NormalizedHeader)
-(define (decode-headers bs dt)
-  (define header-reps (read-header-reps bs))
-  (for/list ([hrep (in-list header-reps)])
-    (decode-header hrep dt)))
+;; decode-header : Bytes DTable -> (Listof NormalizedHeader)
+(define (decode-header bs dt)
+  (define hfield-reps (read-hfield-reps bs))
+  (for/list ([hrep (in-list hfield-reps)])
+    (decode-hfield hrep dt)))
 
-(define (read-header-reps bs)
+(define (read-hfield-reps bs)
   (define br (make-binary-reader (open-input-bytes bs) #:limit (bytes-length bs)))
   (let loop ()
     (cond [(b-at-limit? br) null]
-          [else (cons (read-header-rep br) (loop))])))
+          [else (cons (read-hfield-rep br) (loop))])))
 
-(define (decode-header h dt)
+(define (decode-hfield h dt)
   (match h
     [(header:indexed index)
      (table-ref dt index)]
@@ -258,7 +258,7 @@
 (struct header:literal (mode key value) #:prefab)
 (struct header:maxsize (maxsize) #:prefab)
 
-(define (read-header-rep br)
+(define (read-hfield-rep br)
   (define b (b-read-byte br))
   (cond [(bitwise-bit-set? b 7) ;; #b1...
          ;; 6.1 Indexed Header Field Representation
@@ -683,7 +683,7 @@
            racket/pretty)
   (pretty-print-columns 80)
 
-  (define ex-headers
+  (define ex-header
     '((#":method" #"GET")
       (#":authority" #"www.racket-lang.org")
       (#":path" #"/")
@@ -693,79 +693,79 @@
       (#"x-racket-thing" #"syntax-local-something")
       (#"x-expect-not-huffman" #"{|~~ $& ~~|}")
       (#"x-expect-huffman" #"00001111 00001111 00001111")))
-  (define enc-header-reps (encode-headers* ex-headers (make-dtable 512)))
+  (define enc-header-reps (encode-header* ex-header (make-dtable 512)))
   ;(pretty-print enc-header-reps)
 
-  (define hblock (encode-headers ex-headers (make-dtable 512)))
+  (define hblock (encode-header ex-header (make-dtable 512)))
   ;; hblock
 
-  (define dec-header-reps (read-header-reps hblock))
+  (define dec-header-reps (read-hfield-reps hblock))
   (equal? dec-header-reps enc-header-reps)
   ;(pretty-print dec-header-reps)
 
-  (define dec-headers (decode-headers hblock (make-dtable 512)))
-  ;(pretty-print dec-headers)
-  (equal? dec-headers ex-headers)
+  (define dec-header (decode-header hblock (make-dtable 512)))
+  ;(pretty-print dec-header)
+  (equal? dec-header ex-header)
 
   ;; ============================================================
 
   (require file/sha1)
-  ;;(define b1 (encode-headers '((#"custom-key" #"custom-header")) (make-dtable 4096)))
-  ;(define b1 (encode-headers '((#":path" #"/sample/path")) (make-dtable 4096)))
+  ;;(define b1 (encode-header '((#"custom-key" #"custom-header")) (make-dtable 4096)))
+  ;(define b1 (encode-header '((#":path" #"/sample/path")) (make-dtable 4096)))
   ;b1
   ;(bytes->hex-string b1)
 
   (define dt-shared (make-dtable 4096)) ;; Note: shared between consecutive examples!
-  (define b1 (encode-headers '((#":method" #"GET")
-                               (#":scheme" #"http")
-                               (#":path" #"/")
-                               (#":authority" #"www.example.com"))
-                             dt-shared #:huffman? #f))
+  (define b1 (encode-header '((#":method" #"GET")
+                              (#":scheme" #"http")
+                              (#":path" #"/")
+                              (#":authority" #"www.example.com"))
+                            dt-shared #:huffman? #f))
   (equal? (bytes->hex-string b1)
           "828684410f7777772e6578616d706c652e636f6d")
 
-  (define b2 (encode-headers '((#":method" #"GET")
-                               (#":scheme" #"http")
-                               (#":path" #"/")
-                               (#":authority" #"www.example.com")
-                               (#"cache-control" #"no-cache"))
-                             dt-shared #:huffman? #f))
+  (define b2 (encode-header '((#":method" #"GET")
+                              (#":scheme" #"http")
+                              (#":path" #"/")
+                              (#":authority" #"www.example.com")
+                              (#"cache-control" #"no-cache"))
+                            dt-shared #:huffman? #f))
   (equal? (bytes->hex-string b2)
           "828684be58086e6f2d6361636865")
 
-  (define b3 (encode-headers '((#":method" #"GET")
-                               (#":scheme" #"https")
-                               (#":path" #"/index.html")
-                               (#":authority" #"www.example.com")
-                               (#"custom-key" #"custom-value"))
-                             dt-shared #:huffman? #f #:overrides #hash((#"custom-key" . yes))))
+  (define b3 (encode-header '((#":method" #"GET")
+                              (#":scheme" #"https")
+                              (#":path" #"/index.html")
+                              (#":authority" #"www.example.com")
+                              (#"custom-key" #"custom-value"))
+                            dt-shared #:huffman? #f #:overrides #hash((#"custom-key" . yes))))
   (equal? (bytes->hex-string b3)
           "828785bf400a637573746f6d2d6b65790c637573746f6d2d76616c7565")
 
   (define dt2 (make-dtable 4096)) ;; Note: shared between consecutive examples!
-  (define h1 (encode-headers '((#":method" #"GET")
-                               (#":scheme" #"http")
-                               (#":path" #"/")
-                               (#":authority" #"www.example.com"))
-                             dt2 #:huffman? #t))
+  (define h1 (encode-header '((#":method" #"GET")
+                              (#":scheme" #"http")
+                              (#":path" #"/")
+                              (#":authority" #"www.example.com"))
+                            dt2 #:huffman? #t))
   (equal? (bytes->hex-string h1)
           "828684418cf1e3c2e5f23a6ba0ab90f4ff")
 
-  (define h2 (encode-headers '((#":method" #"GET")
-                               (#":scheme" #"http")
-                               (#":path" #"/")
-                               (#":authority" #"www.example.com")
-                               (#"cache-control" #"no-cache"))
-                             dt2 #:huffman? #t))
+  (define h2 (encode-header '((#":method" #"GET")
+                              (#":scheme" #"http")
+                              (#":path" #"/")
+                              (#":authority" #"www.example.com")
+                              (#"cache-control" #"no-cache"))
+                            dt2 #:huffman? #t))
   (equal? (bytes->hex-string h2)
           "828684be5886a8eb10649cbf")
 
-  (define h3 (encode-headers '((#":method" #"GET")
-                               (#":scheme" #"https")
-                               (#":path" #"/index.html")
-                               (#":authority" #"www.example.com")
-                               (#"custom-key" #"custom-value"))
-                             dt2 #:huffman? #t #:overrides #hash((#"custom-key" . yes))))
+  (define h3 (encode-header '((#":method" #"GET")
+                              (#":scheme" #"https")
+                              (#":path" #"/index.html")
+                              (#":authority" #"www.example.com")
+                              (#"custom-key" #"custom-value"))
+                            dt2 #:huffman? #t #:overrides #hash((#"custom-key" . yes))))
   (equal? (bytes->hex-string h3)
           "828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf")
 
