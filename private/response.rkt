@@ -40,9 +40,7 @@
         (if (bytes? content) (open-input-bytes content) content))
       (case decode-mode
         [(gzip deflate)
-         (eprintf "!! decoding ~s\n" decode-mode)
-         (set! content
-               (make-decode-input-wrapper decode-mode (get-content-in)))
+         (set! content (make-decode-input-wrapper decode-mode (get-content-in)))
          decode-mode]
         [else #f]))
 
