@@ -185,7 +185,15 @@
     ;; ============================================================
     ;; Reader thread
 
-    (define reader-thread (thread (lambda () (reader))))
+    (define reader-thread
+      (thread
+       (lambda ()
+         (parameterize ((uncaught-exception-handler
+                         (let ([h (uncaught-exception-handler)])
+                           (lambda (e)
+                             (log-http1-error "unhandled exception in reader thread")
+                             (h e)))))
+           (reader)))))
 
     (define/private (reader)
       ;; Waiting for either SR from queue or EOF from server (if in?=#t).

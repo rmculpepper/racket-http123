@@ -44,15 +44,17 @@
 (define who-mark (gensym 'who))
 
 (define-syntax-rule (with-entry-point who body ...)
+  ;; if who is #f, resets to empty
   (with-continuation-mark who-mark who (begin0 (let () body ...))))
 
-(define (get-entry-points) ;; reversed, ie earliest->latest
-  (define entry-points
-    (continuation-mark-set->list (current-continuation-marks) who-mark))
-  (if (pair? entry-points) (reverse entry-points) '(http123)))
+(define (get-entry-point default-who)
+  (define eps (continuation-mark-set->list (current-continuation-marks) who-mark))
+  (let loop ([eps eps] [default (or default-who 'http123)])
+    (cond [(null? eps) default]
+          [(eq? (car eps) #f) default]
+          [else (loop (cdr eps) (car eps))])))
 
-(define (http123-who)
-  (car (get-entry-points)))
+(define (http123-who [default-who 'http123]) (get-entry-point default-who))
 
 (define h-error-info (make-parameter #hasheq()))
 
@@ -61,7 +63,7 @@
                 fmt . args)
   (define info (h-error-info))
   (if (hash-empty? info)
-      (apply error (or (http123-who) who 'http123) fmt args)
+      (apply error (http123-who who) fmt args)
       (apply h-error #:who who #:code code #:info info fmt args)))
 
 (define-syntax-rule (with-handler handler . body)
@@ -77,12 +79,14 @@
        (values msg cms info)]
       [(exn msg cms) (values msg cms #hasheq())]
       [v (values (format "non-exception value raised: ~e" v) #f #hasheq())]))
-  (raise (exn:fail:http123 (if message-prefix
-                               (string-append message-prefix ";\n " msg)
-                               msg)
-                           (or cms (current-continuation-marks))
-                           (hash-set (merge-info base-info info)
-                                     'wrapped-exn e))))
+  (exn:fail:http123 (if message-prefix
+                        (format "~a: ~a;\n ~a"
+                                (http123-who (hash-ref base-info 'who #f))
+                                message-prefix msg)
+                        msg)
+                    (or cms (current-continuation-marks))
+                    (hash-set (merge-info base-info info)
+                              'wrapped-exn e)))
 
 (define (merge-info base-info info)
   (for/fold ([info info])
@@ -115,7 +119,7 @@
     (let/ec k
       (raise (exn:fail:http123
               (format "~a: ~a"
-                      (or (http123-who) (hash-ref info 'who #f) 'http123)
+                      (http123-who (hash-ref info 'who #f))
                       (apply format fmt args))
               (continuation-marks k)
               info)))))
@@ -125,14 +129,18 @@
                   #:wrapped-exn [wrapped-exn #f]
                   fmt . args)
   (apply h-error fmt args
-         #:info (hash-set info 'version 'http/1.1) base-info #:wrapped-exn wrapped-exn))
+         #:info (hash-set info 'version 'http/1.1)
+         #:base-info base-info
+         #:wrapped-exn wrapped-exn))
 
 (define (h2-error #:info [info #hasheq()]
                   #:base-info [base-info (h-error-info)]
                   #:wrapped-exn [wrapped-exn #f]
                   fmt . args)
   (apply h-error fmt args
-         #:info (hash-set info 'version 'http/2) base-info #:wrapped-exn wrapped-exn))
+         #:info (hash-set info 'version 'http/2)
+         #:base-info base-info
+         #:wrapped-exn wrapped-exn))
 
 ;; FIXME: Goal: should be clear to user whether request was sent and
 ;; received (as much as we can know, anyway)

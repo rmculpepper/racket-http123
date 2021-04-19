@@ -136,7 +136,8 @@
     (define-values (key-bs val-bs) (get-kv raw-field))
     (define key (or (header-key->symbol key-bs #t)
                     (h-error "bad header field key\n  key: ~e" key-bs
-                             (hasheq 'who 'make-headers-from-list 'code 'bad-header-field-key))))
+                             #:info (hasheq 'who 'make-headers-from-list
+                                            'code 'bad-header-field-key))))
     (cond [(hash-ref table key #f)
            => (lambda (old-v)
                 (define old-v* (if (bytes? old-v) (list old-v) old-v))
@@ -156,7 +157,8 @@
      (match (regexp-match (rx^$ HEADER-FIELD) line)
        [(list _ key-bs val-bs) (values key-bs val-bs)]
        [_ (h-error "malformed header field line\n  line: ~e" line
-                   (hasheq 'who 'make-header-from-lines 'code 'bad-header-field-line))]))))
+                   #:info (hasheq 'who 'make-header-from-lines
+                                  'code 'bad-header-field-line))]))))
 
 
 ;; ============================================================

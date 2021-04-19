@@ -15,11 +15,14 @@
 (define (port-with-abandon? v)
   (or (tcp-port? v) (ssl-port? v) (hash-has-key? abandon-table v)))
 
-(define (abandon-port p)
+(define (abandon-port p [or-close? #t])
   (cond [(tcp-port? p) (tcp-abandon-port p)]
         [(ssl-port? p) (ssl-abandon-port p)]
         [(hash-ref abandon-table p #f)
          => (lambda (abandon) (abandon p))]
+        [or-close?
+         (when (output-port? p) (close-output-port p))
+         (when (input-port? p) (close-input-port p))]
         [else (error 'abandon-port "cannot abandon port: ~e" p)]))
 
 ;; ============================================================
