@@ -1,17 +1,37 @@
 #lang racket/base
 (require racket/class
+         racket/contract/base
          racket/match
          "interfaces.rkt"
+         "header.rkt"
          "decode.rkt")
 (provide (all-defined-out))
 
 ;; ------------------------------------------------------------
 
+(define http-response<%>
+  (interface ()
+    [get-status-code
+     (->m exact-nonnegative-integer?)]
+    [get-status-class
+     (->m symbol?)]
+    [get-header
+     (->m (is-a?/c header<%>))]
+    [get-content
+     (->m (or/c #f bytes? input-port?))]
+    [get-trailer
+     (->m (or/c #f (is-a?/c header<%>)))]
+    [get-trailer-evt
+     (->m (evt/c (or/c #f (is-a?/c header<%>))))]
+    ))
+
+;; ------------------------------------------------------------
+
 (define http-response%
-  (class* object% (class-printable<%>)
+  (class* object% (http-response<%> class-printable<%>)
     (init-field status-code     ;; Nat
                 header          ;; header%
-                content         ;; Bytes or InputPort
+                content         ;; #f or Bytes or InputPort
                 trailerbxe)     ;; #f or (BoxEvt header%)
     (init [handle-content-encoding? #t])
     (super-new)
@@ -22,6 +42,11 @@
     (define/public (get-header) header)
     (define/public (get-content) content)
     (abstract get-version)
+
+    (define/public (get-trailer-evt)
+      (or trailerbxe (wrap-evt always-evt (lambda (ignored) #f))))
+    (define/public (get-trailer)
+      (and trailerbxe (sync trailerbxe)))
 
     ;; ----
 
