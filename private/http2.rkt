@@ -385,7 +385,8 @@
       ;; Get response header. (Note: may receive raised-exception instead!)
       (handle-evt
        resp-header-bxe
-       (lambda (header-entries)
+       (lambda (get-header-entries)
+         (define header-entries (get-header-entries))
          (define header
            (with-handler (lambda (e)
                            (h2-error "error processing header"

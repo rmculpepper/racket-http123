@@ -55,7 +55,7 @@
     (super-new)
 
     (define/public (sync-request req)
-      (sync (async-request req)))
+      ((sync (async-request req))))
 
     ;; Reference: https://tools.ietf.org/html/rfc7231
 

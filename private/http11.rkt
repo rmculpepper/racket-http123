@@ -108,13 +108,13 @@
     (define/private (end-sending)
       (semaphore-post sending-lock))
 
-    ;; open-request : Request -> BoxEvt or #f
+    ;; open-request : Request -> #f or (BoxEvt (-> Response))
     ;; Returns evt if request sent and queued, #f if cannot send in current state.
     (define/public (open-request req)
       (define hls (check-req-header (request-header req)))
       (start-sending)
       (cond [(and (eq? state 'open) (not send-in-progress?))
-             (define resp-bxe (make-box-evt #t))
+             (define resp-bxe (make-box-evt))
              (set! send-in-progress? #t)
              (-send-request req hls)
              (or (enqueue (sending req resp-bxe))
@@ -391,7 +391,7 @@
   (make-pump forward/until-eof))
 
 (define (make-pump/chunked br)
-  (define trailerbxe (make-box-evt #t))
+  (define trailerbxe (make-box-evt))
   (define (forward/chunked out-to-user)
     (define (read-chunk-size)
       (define line (b-read-bytes-line br CHUNKED-EOL-MODE))

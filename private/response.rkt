@@ -22,7 +22,7 @@
     [get-trailer
      (->m (or/c #f (is-a?/c header<%>)))]
     [get-trailer-evt
-     (->m (evt/c (or/c #f (is-a?/c header<%>))))]
+     (->m (evt/c (-> (or/c #f (is-a?/c header<%>)))))]
     ))
 
 ;; ------------------------------------------------------------
@@ -32,7 +32,7 @@
     (init-field status-code     ;; Nat
                 header          ;; header%
                 content         ;; #f or Bytes or InputPort
-                trailerbxe)     ;; #f or (BoxEvt header%)
+                trailerbxe)     ;; (Evt (-> (or/c #f header%)))
     (init [handle-content-encoding? #t])
     (super-new)
 
@@ -44,7 +44,7 @@
     (abstract get-version)
 
     (define/public (get-trailer-evt)
-      (or trailerbxe (wrap-evt always-evt (lambda (ignored) #f))))
+      (or trailerbxe const-false-evt))
     (define/public (get-trailer)
       (and trailerbxe (sync trailerbxe)))
 
@@ -76,6 +76,10 @@
               (list status-code header content)
               #t))
     ))
+
+(define const-false-evt
+  (let ([const-false (lambda () #f)])
+    (wrap-evt always-evt (lambda (ae) const-false))))
 
 ;; ----------------------------------------
 

@@ -8,10 +8,6 @@
          "private/request.rkt"
          (prefix-in util: "private/util.rkt"))
 
-;; A Response is one of
-;; - (list Code ...)
-;; - 
-
 (define (make-server responses server-in server-out)
   (thread
    (lambda ()
@@ -32,7 +28,7 @@
                        (printf "hello\n"))]
                     [else
                      (printf "Content-Length: 0\r\n\r\n")]))]
-           ['sleep (sleep 1)])
+           ['sleep (sleep 0.1)])
          (flush-output server-out))
        (close-output-port server-out)
        (close-input-port server-in)))))
@@ -57,14 +53,14 @@
     (new http11-actual-connection%
          (in client-in) (out out-to-server) (parent parent)))
   (define r1 (send ac open-request (request 'GET "http://localhost/something" null #f)))
-  (sleep 0.1)
+  (sleep 0.05)
   (define r2 (send ac open-request (request 'GET "http://localhost/another" null #f)))
   (check-pred evt? r1)
   (cond [(memq 'no-r2 flags)
          (check-eq? r2 #f)]
         [else
          (check-pred evt? r2)])
-  (check-pred (lambda (v) (is-a? v http11-response%)) (sync r1))
+  (check-pred (lambda (v) (is-a? v http11-response%)) ((sync r1)))
   (unless (memq 'no-r2 flags)
     (with-handlers ([(lambda (e) #t)
                      (lambda (e)
@@ -78,7 +74,7 @@
                        (when (memq 'unknown-received flags)
                          (check-eq? (hash-ref info 'received #f) 'unknown))
                        (void))])
-      (sync r2)
+      ((sync r2))
       (error "failed to raise exn"))))
 
 (test '((200))

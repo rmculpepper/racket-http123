@@ -395,7 +395,7 @@
     ;; Stage 1. Sending request data
     (define-values (in-from-user user-out) (make-pipe))
     ;; Stage 2. Receive response header
-    (define resp-header-bxe (make-box-evt #t))  ;; can be used to send raised-exn back
+    (define resp-header-bxe (make-box-evt))  ;; can be used to send raised-exn back
     ;; Stage 3. Reading response data
     ;; Want to tie flow control to user's consumption of data. That is, when
     ;; user consumes N bytes, want to request another N bytes from server.
@@ -403,7 +403,7 @@
     (define user-in-last-position (file-position user-in))
     (define user-in-last-progress-evt (port-progress-evt user-in)) ;; progress or close!
     ;; Stage 4.
-    (define trailerbxe (make-box-evt #t))
+    (define trailerbxe (make-box-evt))
 
     (define/public (get-user-communication)
       (values user-out

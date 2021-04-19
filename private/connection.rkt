@@ -106,9 +106,9 @@
 
     ;; sync-request : Request -> Response
     (define/public (sync-request req)
-      (sync (async-request req)))
+      ((sync (async-request req))))
 
-    ;; async-request : Request -> Evt[Response]
+    ;; async-request : Request -> (BoxEvt (-> Response))
     (define/public (async-request req)
       (define TRIES 2)
       (let loop ([attempts 0])

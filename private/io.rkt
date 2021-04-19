@@ -88,14 +88,12 @@
   #:property prop:evt (struct-field-index evt))
 (define box-is-unset (gensym))
 
-(define (make-box-evt [call? #f])
+(define (make-box-evt)
   (define b (box box-is-unset))
   (define sema (make-semaphore 0))
   (define evt ;; FIXME: wrap or handle?
     (wrap-evt (semaphore-peek-evt sema)
-              (if call?
-                  (lambda (_e) ((unbox b)))
-                  (lambda (_e) (unbox b)))))
+              (lambda (_e) (unbox b))))
   (box-evt b sema evt))
 
 (define (box-evt-set! be v)
