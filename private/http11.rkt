@@ -67,12 +67,13 @@
     ;; - 'open
     ;; - 'abandoned-by-reader
     ;; - 'closed-by-reader
+    ;; - 'abandoned-by-user
     (define state 'open)
 
-    ;; closed? : Boolean
-    ;; Really, closed for sending. Receives may still be in progress.
-    (define/public (closed?)
-      (not (eq? state 'open)))
+    ;; {open?,closed?} : Boolean
+    ;; Really, open vs closed for sending. If closed, receives may still be in progress.
+    (define/public (open?) (eq? state 'open))
+    (define/public (closed?) (not (closed?)))
 
     ;; ============================================================
 
@@ -84,15 +85,14 @@
                    (apply h1-error fmt args #:info (hasheq 'code 'read)))
          #:show-data? (lambda (br who) #f))))
 
-    (define/private (abandon-in) (abandon-port in))
-    (define/private (abandon-out) (abandon-port out))
-    (define/public (abandon) (abandon-out))
+    (define/public (abandon)
+      (abandon-out 'abandoned-by-user))
 
-    ;; Misc bits of useful state information:
-    ;; - http-spoken?         -- are we sure the server speaks HTTP (because of a response)?
-    ;; - last-send            -- time of last send we performed (related to timeout)
-    #;(define http-spoken? #f)
-    #;(define last-send -inf.0)
+    (define/private (abandon-out new-state)
+      (define old-state (with-lock (begin0 state (set! state new-state))))
+      (abandon-port out)
+      (when (eq? old-state 'open)
+        (send parent on-actual-disconnect this)))
 
     ;; ============================================================
     ;; Sending Requests
@@ -228,7 +228,7 @@
          (define-values (resp close? pump) (read-response req))
          (when close?
            (log-http1-debug "got Connection:close from server")
-           (abandon-out-from-reader))
+           (abandon-out 'abandoned-by-reader))
          (box-evt-set! bxe (lambda () resp))
          (pump)
          (cond [close? (lambda () (reader/close))]
@@ -237,7 +237,7 @@
     ;; Got EOF from server at the beginning of a response.
     (define/private (reader/eof sr)
       (log-http1-debug "got EOF from server")
-      (abandon-out-from-reader)
+      (abandon-out 'abandoned-by-reader)
       (fail-queue 'unknown sr)
       (close-from-reader)
       (log-http1-debug "ending reader loop due to EOF from server"))
@@ -248,11 +248,6 @@
       (close-from-reader)
       (log-http1-debug "ending reader loop due to Connection:close from server"))
 
-    (define/private (abandon-out-from-reader)
-      (define old-state (with-lock (begin0 state (set! state 'abandoned-by-reader))))
-      (abandon-port out)
-      (when (eq? old-state 'open)
-        (send parent on-actual-disconnect this)))
     (define/private (close-from-reader)
       (define old-state (with-lock (begin0 state (set! state 'closed-by-reader))))
       (close-output-port out)
@@ -356,7 +351,7 @@
                     [else (make-pump/content-length br len)]))]
         [else ;; Case 7
          (log-http1-debug "reading content until EOF, no Transfer-Encoding or Content-Length")
-         (abandon-out-from-reader)
+         (abandon-out 'abandoned-by-reader)
          (make-pump/until-eof in)]))
     ))
 
