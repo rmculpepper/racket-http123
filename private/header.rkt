@@ -32,7 +32,7 @@
 (define header<%>
   (interface ()
     [get-header-table
-     (->m (hash/c symbol? (or/c bytes? (listof bytes?))))]
+     (->m (hash/c header-key-symbol? (or/c bytes? (listof bytes?))))]
     [get-header-entries
      (->*m [] [boolean?] (listof (list/c bytes? bytes?)))]
     [get-header-lines

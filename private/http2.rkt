@@ -80,8 +80,10 @@
         (set! closed? reason)
         (abandon-port out)))
 
-    (define/public (live?) (not closed?))
     (define/public (abandon) (set-closed! 'user-abandoned))
+
+    (define/public (open?) (not closed?))
+    (define/public (closed?) (not (open?)))
 
     ;; ----------------------------------------
 
@@ -148,7 +150,7 @@
     ;; ----------------------------------------
     ;; Handling frames received from server
 
-    (define/public (handle-frame-or-other v)
+    (define/private (handle-frame-or-other v)
       (match v
         [(? frame? fr) (handle-frame fr)]
         ['EOF (unless closed?
@@ -159,7 +161,7 @@
 
     (define in-continue-frames null) ;; (Listof Frame), reversed
 
-    (define/public (handle-frame fr)
+    (define/private (handle-frame fr)
       (cond [(pair? in-continue-frames)
              (define streamid (frame-streamid (car in-continue-frames)))
              (match fr
@@ -172,7 +174,7 @@
                [_ (connection-error error:PROTOCOL_ERROR "expected continuation")])]
             [else (handle-frame* fr)]))
 
-    (define/public (handle-multipart-frames frs)
+    (define/private (handle-multipart-frames frs)
       (define (get-header streamid first-headerbf)
         (define rest-headerbfs
           (for/list ([fr (in-list (cdr frs))])
@@ -198,7 +200,7 @@
          (send (get-stream streamid) handle-push_promise-payload
                flags (fp:push_promise padlen promised-streamid header))]))
 
-    (define/public (handle-frame* fr)
+    (define/private (handle-frame* fr)
       (match fr
         [(frame type flags streamid payload)
          (define (stream) (get-stream streamid))
@@ -280,7 +282,7 @@
       (set! config new-config)
       (queue-frame (frame type:SETTINGS flag:ACK 0 (fp:settings null))))
 
-    (define/public (handle-connection-window_update flags increment)
+    (define/private (handle-connection-window_update flags increment)
       (set! out-flow-window (+ out-flow-window increment))
       (unless (< out-flow-window FLOW-WINDOW-BOUND)
         (connection-error error:FLOW_CONTROL_ERROR "window too large")))
@@ -292,7 +294,7 @@
       ;; FIXME: sending window_update frame is delayed until... ???
       (set! target-in-flow-window (+ target-in-flow-window increment)))
 
-    (define/public (after-handle-frame)
+    (define/private (after-handle-frame)
       (when (< in-flow-window target-in-flow-window)
         (define diff (- target-in-flow-window in-flow-window))
         (queue-frame (frame type:WINDOW_UPDATE 0 0 (fp:window_update diff)))

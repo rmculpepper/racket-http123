@@ -7,8 +7,6 @@
          "decode.rkt")
 (provide (all-defined-out))
 
-;; ------------------------------------------------------------
-
 (define http-response<%>
   (interface ()
     [get-status-code

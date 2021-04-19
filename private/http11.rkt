@@ -308,7 +308,7 @@
          (define-values (content pump trailerbxe) (make-content-pump header))
          (values (make-resp content trailerbxe) close? pump)]))
 
-    (define/public (read-status-line)
+    (define/private (read-status-line)
       (define line (b-read-bytes-line br STATUS-EOL-MODE))
       (log-http1-debug "got status line: ~e" line)
       (match (regexp-match (rx STATUS-LINE) line)
@@ -317,7 +317,7 @@
         [#f (h1-error "expected status line from server\n  got: ~e" line
                       #:info (hasheq 'code 'bad-status-line))]))
 
-    (define/public (read-raw-header)
+    (define/private (read-raw-header)
       (define next (b-read-bytes-line br HEADER-EOL-MODE))
       (cond [(equal? next #"") null]
             [else (cons next (read-raw-header))]))
