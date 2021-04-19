@@ -2,6 +2,7 @@
 (require racket/class
          racket/contract/base
          racket/match
+         racket/port
          "interfaces.rkt"
          "header.rkt"
          "decode.rkt")
@@ -29,16 +30,35 @@
   (class* object% (http-response<%> class-printable<%>)
     (init-field status-code     ;; Nat
                 header          ;; header%
-                content         ;; #f or Bytes or InputPort
                 trailerbxe)     ;; (Evt (-> (or/c #f header%)))
-    (init [handle-content-encoding? #t])
+    (init ((init-content content))) ;; #f or Bytes or InputPort
     (super-new)
+
+    ;; content : #f or Bytes
+    (field [content (and (bytes? init-content) init-content)])
+
+    ;; content-in : #f or InputPort
+    (field [content-in (and (input-port? init-content) init-content)])
 
     (define/public (get-status-code) status-code)
     (define/public (get-status-class)
       (status-code->class status-code))
     (define/public (get-header) header)
-    (define/public (get-content) content)
+
+    (define/public (has-content?) (or content content-in))
+
+    (define/public (get-content)
+      (or content
+          (and content-in
+               (let ([c (port->bytes content-in)])
+                 (begin (set! content c) c)))))
+
+    (define/public (get-content-in)
+      (or content-in
+          (and content
+               (let ([ci (open-input-bytes content)])
+                 (begin (set! content-in ci) ci)))))
+
     (abstract get-version)
 
     (define/public (get-trailer-evt)
@@ -48,31 +68,17 @@
 
     ;; ----
 
-    (define content-decoded #f)
-    (when handle-content-encoding?
-      (set! content-decoded (handle-content-encoding)))
-
-    (define/public (get-content-encoding)
-      ;; FIXME: could extend to Content-Encoding lists, remove known
-      (cond [content-decoded #f]
-            [else (send header get-value 'content-encoding)]))
-
-    (define/public (handle-content-encoding)
-      (define decode-mode (get-decode-mode header))
-      (define (get-content-in)
-        (if (bytes? content) (open-input-bytes content) content))
-      (case decode-mode
-        [(gzip deflate)
-         (set! content (make-decode-input-wrapper decode-mode (get-content-in)))
-         decode-mode]
-        [else #f]))
-
     (define/public (get-printing-classname)
       'http-response%)
     (define/public (get-printing-components)
-      (values '(status-code header content)
-              (list status-code header content)
-              #t))
+      (cond [(not content-in)
+             (values '(status-code header content)
+                     (list status-code header content)
+                     #t)]
+            [else
+             (values '(status-code header content-in)
+                     (list status-code header content-in)
+                     #t)]))
     ))
 
 (define const-false-evt
@@ -81,8 +87,26 @@
 
 ;; ----------------------------------------
 
+(define decoding-response%
+  (class http-response%
+    (init header
+          content
+          [handle-content-encoding? #t])
+    (let ()
+      (define decode-mode (get-decode-mode header))
+      (define content*
+        (case (and content decode-mode)
+          [(gzip deflate)
+           (let ([content-in (if (bytes? content) (open-input-bytes content) content)])
+             (make-decode-input-wrapper decode-mode content-in))]
+          [else content]))
+      (super-new (header header) (content content*)))
+    ))
+
+;; ----------------------------------------
+
 (define http11-response%
-  (class* http-response% ()
+  (class* decoding-response% ()
     (init-field [status-line #f])
     (super-new)
 
@@ -92,7 +116,7 @@
     ))
 
 (define http2-response%
-  (class* http-response% ()
+  (class* decoding-response% ()
     (super-new)
     (define/override (get-version) 'http/2)
     (define/override (get-printing-classname) 'http2-response%)

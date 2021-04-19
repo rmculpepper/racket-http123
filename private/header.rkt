@@ -31,7 +31,7 @@
 
 (define header<%>
   (interface ()
-    [get-header-table
+    [get-table
      (->m (hash/c header-key-symbol? (or/c bytes? (listof bytes?))))]
     [get-header-entries
      (->*m [] [boolean?] (listof (list/c bytes? bytes?)))]
@@ -60,8 +60,8 @@
     (init-field [table (make-hasheq)]) ;; Hasheq[Symbol => (U Bytes (Listof Bytes))]
     (super-new)
 
-    (define/public (get-header-table)
-      (hash-copy table))
+    (define/public (get-table) table)
+    (define/public (copy-table) (hash-copy table))
 
     (define/public (get-header-entries [combine? #f])
       (for*/list ([(k vs) (in-hash table)]
@@ -245,6 +245,10 @@
 (define-rx HEADER-FIELD (rx HEADER-START OWS (record FIELD-VALUE) OWS))
 
 (define-rx TOKEN+ (rx TOKEN (* OWS "," OWS TOKEN)))
+
+(define-rx qdtext #rx#"[ \t\x21\x23-\x5b\x5D-\x7E]")
+(define-rx quoted-pair #rx#"\\\\[ \t\x21-\x7E]")
+(define-rx quoted-string (rx "\"" (* (or qdtext quoted-pair)) "\""))
 
 
 ;; ============================================================
