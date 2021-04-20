@@ -46,3 +46,20 @@
 ;; RFC 7231 4.2.? (Idempotent Methods)
 (define (method:idempotent? method)
   (or (method:safe? method) (memq method '(PUT DELETE))))
+
+;; flags : safe, idempotent, {undef,forbid}-request-body, never-response-body
+;; - 'undef-request-body - standard assigns no semantics, but not forbidden
+;; - 'forbid-request-body - client MUST NOT send body
+;; - 'never-response-body - no response body, regardless of status
+(define known-methods
+  #hasheq((GET     . (safe undef-request-body))
+          (HEAD    . (safe undef-request-body never-response-body))
+          (POST    . ())
+          (PUT     . (idmp))
+          (DELETE  . (idmp undef-request-body))
+          (OPTIONS . (safe))
+          (TRACE   . (safe forbid-request-body))
+          (CONNECT . (disallow undef-request-body))
+
+          (PATCH   . ()) ;; RFC 5789
+          ))

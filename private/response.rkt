@@ -18,8 +18,8 @@
      (->m symbol?)]
     [get-header
      (->m (is-a?/c header<%>))]
-    [get-content
-     (->m (or/c #f bytes? input-port?))]
+    [get-content-in
+     (->m (or/c #f input-port?))]
     [get-trailer
      (->m (or/c #f (is-a?/c header<%>)))]
     [get-trailer-evt
@@ -45,7 +45,7 @@
     (define/public (get-status-class)
       (status-code->class status-code))
     (define/public (get-header) header)
-    (define/public (has-content?) (or content content-in))
+    (define/public (has-content?) (and content-in #t))
     (define/public (get-content-in) content-in)
 
     (abstract get-version)

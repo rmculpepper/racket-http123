@@ -1,12 +1,23 @@
 #lang racket/base
 (require racket/class
+         racket/contract/base
          racket/match
          net/url-string
          "interfaces.rkt"
          "request.rkt"
+         "response.rkt"
          "connection.rkt"
          "util.rkt")
 (provide (all-defined-out))
+
+(define http-client-base<%>
+  (interface ()
+    [async-request (-> request? (evt/c (-> (is-a?/c http-response<%>))))]
+    ))
+
+(define http-client<%>
+  (interface (http-client-base<%>)
+    ))
 
 ;; Add helpers to
 ;; - create a client that uses a single connection
