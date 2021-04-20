@@ -10,6 +10,8 @@
 
 (define http-response<%>
   (interface ()
+    [get-version
+     (->m symbol?)]
     [get-status-code
      (->m exact-nonnegative-integer?)]
     [get-status-class
