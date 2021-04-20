@@ -36,51 +36,31 @@
     (init ((init-content content))) ;; #f or Bytes or InputPort
     (super-new)
 
-    ;; content : #f or Bytes
-    (field [content (and (bytes? init-content) init-content)])
-
     ;; content-in : #f or InputPort
-    (field [content-in (and (input-port? init-content) init-content)])
+    (field [content-in (cond [(bytes? init-content) (open-input-bytes init-content)]
+                             [(input-port? init-content) init-content]
+                             [else #f])])
 
     (define/public (get-status-code) status-code)
     (define/public (get-status-class)
       (status-code->class status-code))
     (define/public (get-header) header)
-
     (define/public (has-content?) (or content content-in))
-
-    (define/public (get-content)
-      (or content
-          (and content-in
-               (let ([c (port->bytes content-in)])
-                 (begin (set! content c) c)))))
-
-    (define/public (get-content-in)
-      (or content-in
-          (and content
-               (let ([ci (open-input-bytes content)])
-                 (begin (set! content-in ci) ci)))))
+    (define/public (get-content-in) content-in)
 
     (abstract get-version)
 
     (define/public (get-trailer-evt)
       (or trailerbxe const-false-evt))
     (define/public (get-trailer)
-      (and trailerbxe (sync trailerbxe)))
+      (and trailerbxe ((sync trailerbxe))))
 
     ;; ----
 
     (define/public (get-printing-classname)
       'http-response%)
     (define/public (get-printing-components)
-      (cond [(not content-in)
-             (values '(status-code header content)
-                     (list status-code header content)
-                     #t)]
-            [else
-             (values '(status-code header content-in)
-                     (list status-code header content-in)
-                     #t)]))
+      (values '(status-code header) (list status-code header) #t))
     ))
 
 (define const-false-evt
