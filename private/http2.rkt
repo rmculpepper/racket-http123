@@ -330,7 +330,7 @@
         (log-http2-debug "manager updating work evts (~s)" (length work-evts))
         (define streams-evt (apply choice-evt work-evts))
         (let loop ()
-          (log-http2-debug "manager loop")
+          #;(log-http2-debug "manager loop")
           (with-handlers ([(lambda (e) (eq? e 'escape-without-error)) void]
                           [(lambda (e) (eq? e 'stream-error)) void])
             (sync streams-evt

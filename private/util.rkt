@@ -32,17 +32,27 @@
 ;; ============================================================
 ;; URLs
 
-(define (check-http-url who u [orig u])
-  (define (bad msg) (error who "~a\n  URL: ~e" msg orig))
-  (match-define (url scheme user host port path-abs? path query fragment) u)
-  (unless scheme (bad "bad URL, missing scheme"))
-  (define scheme* (normalize-http-scheme scheme))
-  (unless scheme* (bad "bad URL, expected \"http\" or \"https\" for scheme"))
-  (when user (bad "bad URL, contains userinfo"))
-  (unless host (bad "bad URL, missing host"))
-  (define host* (string->immutable-string (string-downcase host)))
-  (unless path-abs? (bad "bad URL, path is not absolute"))
-  (url scheme* #f host* port path-abs? path query fragment))
+(define (check-http-url who loc [orig loc])
+  (match loc
+    [(url scheme user host port path-abs? path query fragment)
+     (define (bad msg) (error who "~a\n  URL: ~e" msg orig))
+     (unless scheme (bad "bad URL, missing scheme"))
+     (define scheme* (normalize-http-scheme scheme))
+     (unless scheme* (bad "bad URL, expected \"http\" or \"https\" for scheme"))
+     (when user (bad "bad URL, contains userinfo"))
+     (unless host (bad "bad URL, missing host"))
+     (define host* (string->immutable-string (string-downcase host)))
+     (unless path-abs? (bad "bad URL, path is not absolute"))
+     (cond [(and (eq? scheme* scheme) (eq? host* host)) loc]
+           [else (url scheme* #f host* port path-abs? path query fragment)])]
+    [(? string?)
+     (define u
+       (with-handlers ([exn:fail?
+                        (lambda (e)
+                          (error who "malformed URL string;\n ~a" (exn-message e)))])
+         (string->url loc)))
+     (check-http-url who u orig)]
+    [_ (error who "expected string or URL\n  given: ~e" orig)]))
 
 (define (normalize-http-scheme scheme) ;; if good, result is immutable, downcased
   (cond [(string-ci=? scheme "https") "https"]

@@ -38,7 +38,7 @@
 
     (define/public (get-actual-connection [connect? #t])
       (with-lock
-        (cond [(and conn (send conn live?))
+        (cond [(and conn (send conn open?))
                (log-http-debug "using existing connection")
                conn]
               [connect?

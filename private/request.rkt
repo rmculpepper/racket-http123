@@ -16,8 +16,7 @@
    )
   #:guard (lambda (method loc header data _)
             (define u
-              (cond [(string? loc) (check-http-url 'request (string->url loc) loc)]
-                    [(url? loc) (check-http-url 'request loc loc)]
+              (cond [(or (url? loc) (string? loc)) (check-http-url 'request loc loc)]
                     [else (raise-argument-error 'request "(or/c string? url?)" loc)]))
             (define hs
               (with-entry-point 'request
