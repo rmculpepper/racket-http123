@@ -246,8 +246,8 @@
 
 (define-rx TOKEN+ (rx TOKEN (* OWS "," OWS TOKEN)))
 
-(define-rx qdtext #rx#"[ \t\x21\x23-\x5b\x5D-\x7E]")
-(define-rx quoted-pair #rx#"\\\\[ \t\x21-\x7E]")
+(define-rx qdtext #px#"[ \t\x21\x23-\\\x5B\\\x5D-\x7E]")
+(define-rx quoted-pair #px#"\\\\[ \t\x21-\x7E]")
 (define-rx quoted-string (rx "\"" (* (or qdtext quoted-pair)) "\""))
 
 
