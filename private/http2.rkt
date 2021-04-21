@@ -158,6 +158,8 @@
         ['EOF (unless closed?
                 ;; FIXME: update all streams like goaway?
                 (set-closed! 'EOF))]
+        ;; Request for new stream
+        [(? procedure?) (v)]
         ;; FIXME: read-exn, etc?
         ))
 
@@ -369,7 +371,16 @@
 
     ;; called by user thread
     (define/public (open-request req)
-      (define stream (new-client-stream req #t))
+      (define streambxe (make-box-evt))
+      (thread-send manager-thread
+                   (lambda ()
+                     (with-handler (lambda (e)
+                                     (box-evt-set! streambxe (lambda () (raise e)))
+                                     (raise e))
+                       (define stream (new-client-stream req #t))
+                       (box-evt-set! streambxe (lambda () stream))))
+                   (lambda () #f))
+      (define stream ((sync streambxe)))
       ;; Stream automatically sends request header.
       (define-values (user-out resp-header-bxe user-in trailerbxe)
         (send stream get-user-communication))
