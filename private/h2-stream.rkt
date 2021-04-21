@@ -23,6 +23,10 @@
     (init req send-req?)
     (super-new)
 
+    ;; Stream-local limit on flow-controlled {sends, receives}.
+    (define out-flow-window INIT-FLOW-WINDOW)
+    (define in-flow-window INIT-FLOW-WINDOW)
+
     (field [state 'idle]) ;; StreamState, see below
     (field [s2 (new stream-level2% (s1 this) (streamid streamid) (conn conn)
                     (req req) (send-req? send-req?))])
@@ -56,19 +60,20 @@
     ;; ----------------------------------------
     ;; Flow windows
 
-    ;; Stream-local limit on flow-controlled {sends, receives}.
-    (define out-flow-window INIT-FLOW-WINDOW)
-    (define in-flow-window INIT-FLOW-WINDOW)
-
     (define/public (get-effective-out-flow-window)
       (min out-flow-window (send conn get-out-flow-window)))
 
-    (define/public (adjust-in-flow-window delta actual?)
-      (set! in-flow-window (+ in-flow-window delta))
-      ;; FIXME: check for negative window error
-      (if actual?
-          (send conn adjust-in-flow-window delta)
-          (send conn adjust-target-flow-window delta)))
+    ;; Increased by queue-frame (WINDOW_UPDATE case), decreased by
+    ;; handle-data-payload.
+    (define/public (adjust-in-flow-window delta)
+      ;; FIXME: check bounds errors
+      (set! in-flow-window (+ in-flow-window delta)))
+
+    ;; Increased by handle-window_update, decreased by queue-frame (DATA case).
+    (define/private (adjust-out-flow-window delta)
+      (set! out-flow-window (+ out-flow-window delta))
+      (unless (< out-flow-window FLOW-WINDOW-BOUND)
+        (stream-error error:FLOW_CONTROL_ERROR)))
 
     ;; ----------------------------------------
     ;; Finite state machine
@@ -121,6 +126,7 @@
            [(window_update) (void)]
            [else (stream-error error:STREAM_CLOSED)])]
         ;; Many flavors of closed state...
+        ;; FIXME: no longer used?!
         [(closed/by-peer-rst)
          (stream-error error:STREAM_CLOSED)]
         [(closed/by-peer-end)
@@ -174,10 +180,7 @@
 
     (define/private (set-state! new-state)
       (define old-state state)
-      (set! state new-state)
-      (when (and (state:closed? new-state) (not (state:closed? old-state)))
-        ;; Remove this connection's contribution to global target in-flow-window.
-        (adjust-in-flow-window (max 0 (- in-flow-window)) #f)))
+      (set! state new-state))
 
     (define/private (state:closed? state)
       (case state
@@ -191,7 +194,7 @@
       (match-define (fp:data padlen data) payload)
       (check-state 'data)
       (let ([len (payload-length flags payload)])
-        (adjust-in-flow-window (- len) #t))
+        (adjust-in-flow-window (- len)))
       (define end? (flags-has? flags flag:END_STREAM))
       (when end? (check-state 'end_stream))
       (send s2 handle-data data end?))
@@ -221,10 +224,8 @@
       (check-state 'rst_stream) ;; pretend
       (send s2 handle-goaway last-streamid errorcode debug))
 
-    (define/public (handle-window_update flags increment)
-      (set! out-flow-window (+ out-flow-window increment))
-      (unless (< out-flow-window FLOW-WINDOW-BOUND)
-        (stream-error error:FLOW_CONTROL_ERROR)))
+    (define/public (handle-window_update flags delta)
+      (adjust-out-flow-window delta))
 
     (define/public (handle-user-abort)
       ;; FIXME: raise better exn?
@@ -236,6 +237,7 @@
     (define/public (queue-frame fr)
       (match (frame-type fr)
         [(== type:DATA)
+         (adjust-out-flow-window (- (frame-fc-length fr)))
          (check-send-state 'data)
          (when (frame-has-flag? fr flag:END_STREAM)
            (check-send-state 'end_stream))]
@@ -246,6 +248,7 @@
         [(== type:RST_STREAM)
          (check-send-state 'rst_stream)]
         [(== type:WINDOW_UPDATE)
+         (adjust-in-flow-window (fp:window_update-increment (frame-payload fr)))
          (check-send-state 'window_update)]
         [_ (void)])
       ;; FIXME: avoid sending multiple RST_STREAM frames, etc
@@ -600,8 +603,7 @@
              (check-s2-state 'end)]
             [else ;; want increment more data
              (define delta (update-user-in-mark/get-delta))
-             (queue-frame (frame type:WINDOW_UPDATE 0 streamid (fp:window_update delta)))
-             (send s1 adjust-in-flow-window delta #f)]))
+             (queue-frame (frame type:WINDOW_UPDATE 0 streamid (fp:window_update delta)))]))
 
     (define/private (update-user-in-mark/get-delta)
       ;; FIXME: get file-position and port-progress-evt atomically ??

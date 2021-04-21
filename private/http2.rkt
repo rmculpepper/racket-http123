@@ -20,6 +20,8 @@
 (define http2-alpn-protocol #"h2")
 (define http2-client-preface #"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
 
+(define INIT-TARGET-IN-FLOW-WINDOW (expt 2 20)) ;; FIXME: config?
+
 (define init-config
   (hasheq 'header-table-size 4096
           'enable-push 1
@@ -65,9 +67,6 @@
     (define out-flow-window INIT-FLOW-WINDOW)
     (define in-flow-window INIT-FLOW-WINDOW)
 
-    ;; Target for in-flow-window is init window plus sum of stream windows.
-    (define target-in-flow-window in-flow-window)
-
     ;; FIXME: resize on SETTINGS receive or ack?
     (define reading-dt (make-dtable (hash-ref config 'header-table-size)))
     (define sending-dt (make-dtable (hash-ref config 'header-table-size)))
@@ -94,6 +93,7 @@
       (log-http2-debug "--> ~a~a" (if closed? "DROPPING " "")
                        (parameterize ((error-print-width 60))
                          (format "~e" fr)))
+      (adjust-out-flow-window (- (frame-fc-length fr)))
       (unless closed? (write-frame out fr)))
     (define/public (queue-frames frs)
       (for ([fr (in-list frs)]) (queue-frame fr)))
@@ -220,6 +220,7 @@
          (match type
            [(== type:DATA)
             (check-stream-nonzero)
+            (adjust-in-flow-window (frame-fc-length fr))
             (send (stream) handle-data-payload flags payload)]
            [(== type:HEADERS)
             (check-stream-nonzero)
@@ -265,10 +266,8 @@
            [(== type:WINDOW_UPDATE)
             (match-define (fp:window_update increment) payload)
             (when (zero? increment) (connection-error error:PROTOCOL_ERROR "zero increment"))
-            (cond [(zero? streamid)
-                   (handle-connection-window_update flags increment)]
-                  [else
-                   (send (stream) handle-window_update flags increment)])]
+            (cond [(zero? streamid) (handle-connection-window_update flags increment)]
+                  [else (send (stream) handle-window_update flags increment)])]
            [(== type:CONTINUATION)
             (connection-error error:PROTOCOL_ERROR "unexpected continuation")]
            [_
@@ -291,24 +290,39 @@
       (set! config new-config)
       (queue-frame (frame type:SETTINGS flag:ACK 0 (fp:settings null))))
 
-    (define/private (handle-connection-window_update flags increment)
-      (set! out-flow-window (+ out-flow-window increment))
+    (define/private (handle-connection-window_update flags delta)
+      (adjust-out-flow-window delta))
+
+    (define/private (after-handle-frame)
+      (define target-in-flow-window (get-target-in-flow-window))
+      (when (< in-flow-window target-in-flow-window)
+        (define delta (- target-in-flow-window in-flow-window))
+        (queue-frame (frame type:WINDOW_UPDATE 0 0 (fp:window_update delta)))
+        (adjust-in-flow-window delta))
+      (flush-frames))
+
+    ;; ------------------------------------------------------------
+    ;; Flow control
+
+    ;; The out-flow window is determined by the server.
+
+    ;; The in-flow window targets a constant. See after-handle-frame.
+    (define/private (get-target-in-flow-window) INIT-TARGET-IN-FLOW-WINDOW)
+
+    ;; Out-flow window is decreased by queue-frame (on DATA send) and
+    ;; increased by handle-connection-window_update.
+    (define/private (adjust-out-flow-window delta)
+      ;; FIXME: detect negative, detect over bound
+      (set! out-flow-window (+ out-flow-window delta))
       (unless (< out-flow-window FLOW-WINDOW-BOUND)
         (connection-error error:FLOW_CONTROL_ERROR "window too large")))
 
-    (define/public (adjust-in-flow-window delta)
-      (set! in-flow-window (+ in-flow-window delta)))
-
-    (define/public (adjust-target-flow-window delta)
-      ;; FIXME: sending window_update frame is delayed until... ???
-      (set! target-in-flow-window (+ target-in-flow-window delta)))
-
-    (define/private (after-handle-frame)
-      (when (< in-flow-window target-in-flow-window)
-        (define diff (- target-in-flow-window in-flow-window))
-        (queue-frame (frame type:WINDOW_UPDATE 0 0 (fp:window_update diff)))
-        (set! in-flow-window target-in-flow-window))
-      (flush-frames))
+    ;; In-flow window is decreased by handle-frame* (DATA case),
+    ;; increased by after-handle-frame.
+    (define/private (adjust-in-flow-window delta)
+      (set! in-flow-window (+ in-flow-window delta))
+      (unless (< in-flow-window FLOW-WINDOW-BOUND)
+        (connection-error error:FLOW_CONTROL_ERROR "window too large")))
 
     ;; ============================================================
     ;; Connection threads (2 per connection)

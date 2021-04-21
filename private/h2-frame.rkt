@@ -187,6 +187,14 @@
 (define (read-headerbf br) ;; FIXME?
   (b-read-bytes br (b-get-limit br)))
 
+;; ----------------------------------------
+
+(define (frame-fc-length fr)
+  (match fr
+    [(frame (== type:DATA) flags _ payload)
+     (payload-length flags payload)]
+    [_ 0]))
+
 ;; ========================================
 
 ;; 4.2 Frame Size
