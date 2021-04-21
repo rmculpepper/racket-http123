@@ -1,5 +1,6 @@
 #lang racket/base
 (require racket/class
+         racket/promise
          racket/match
          binaryio/reader
          openssl
@@ -382,7 +383,7 @@
                    (lambda () #f))
       (define stream ((sync streambxe)))
       ;; Stream automatically sends request header.
-      (define-values (user-out resp-header-bxe user-in trailerbxe)
+      (define-values (user-out resp-bxe)
         (send stream get-user-communication))
       ;; User thread writes request content.
       ;; FIXME: optimize, send short data bytes on stream initialization
@@ -398,28 +399,7 @@
             (put-data (lambda (data) (write-bytes data user-out)))
             (close-output-port user-out)))])
       ;; Get response header. (Note: may receive raised-exception instead!)
-      (memoize/thunk-wrap-evt
-       resp-header-bxe
-       (lambda (get-header-entries)
-         (define header-entries (get-header-entries))
-         (open-request/make-response req header-entries user-in trailerbxe))))
-
-    (define/private (open-request/make-response req header-entries user-in trailerbxe)
-      (define header
-        (with-handler (lambda (e)
-                        (h2-error "error processing header"
-                                  #:info (hasheq 'received 'yes 'wrapped-exn e)))
-          (make-header-from-entries header-entries)))
-      (unless (send header value-matches? ':status #rx#"[1-5][0-9][0-9]")
-        (h2-error "bad or missing status from server"
-                  #:info (hasheq 'received 'yes 'code 'bad-status 'header header)))
-      (define status (send header get-integer-value ':status))
-      (send header remove! ':status)
-      (new http2-response%
-           (status-code status)
-           (header header)
-           (content user-in)
-           (trailerbxe trailerbxe)))
+      resp-bxe)
 
     ;; ========================================
 
@@ -433,19 +413,3 @@
     (send-handshake)
 
     ))
-
-(define (memoize/thunk-wrap-evt base-evt handle)
-  (define result #f)
-  (wrap-evt base-evt
-            (lambda (base-v)
-              (if result
-                  result
-                  (with-handlers ([(lambda (e) #t)
-                                   (lambda (e)
-                                     (set! result (lambda () (raise e)))
-                                     result)])
-                    (call-with-values
-                     (lambda () (handle base-v))
-                     (lambda wrap-vs
-                       (set! result (lambda () (apply values wrap-vs)))
-                       result)))))))

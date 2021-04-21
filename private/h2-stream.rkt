@@ -1,9 +1,11 @@
 #lang racket/base
 (require racket/class
          racket/match
+         racket/promise
          net/url-string
          "interfaces.rkt"
          "header.rkt"
+         "response.rkt"
          "io.rkt"
          "request.rkt"
          "h2-frame.rkt"
@@ -293,7 +295,7 @@
         [(before-response)
          (case transition
            [(headers)           (set-s2-state! 'reading-response-data)]
-           [(headers+end)       (set-s2-state! 'complete)]
+           [(headers+end)       (set-s2-state! 'done)]
            [else (bad)])]
         [(reading-response-data)
          (case transition
@@ -343,7 +345,6 @@
     (define/public (teardown:before-response) (void))
 
     (define/public (setup:reading-response-data)
-      (set! info-for-exn (hash-set info-for-exn 'received 'yes))
       (set-work-evt!
        (handle-evt (guard-evt (lambda () user-in-last-progress-evt))
                    (lambda (ignored) (update-target-in-flow-window)))))
@@ -379,10 +380,14 @@
               'streamid streamid
               'received 'unknown))
 
+    (define/private (set-received! received)
+      (unless (eq? (hash-ref info-for-exn 'received) received)
+        (set! info-for-exn (hash-set info-for-exn 'received received))))
+
     ;; Stage 1. Sending request data
     (define-values (in-from-user user-out) (make-pipe))
     ;; Stage 2. Receive response header
-    (define resp-header-bxe (make-box-evt))  ;; can be used to send raised-exn back
+    (define resp-bxe (make-box-evt))  ;; can be used to send raised-exn back
     ;; Stage 3. Reading response data
     ;; Want to tie flow control to user's consumption of data. That is, when
     ;; user consumes N bytes, want to request another N bytes from server.
@@ -393,13 +398,10 @@
     (define trailerbxe (make-box-evt))
 
     (define/public (get-user-communication)
-      (values user-out
-              resp-header-bxe
-              user-in
-              trailerbxe))
+      (values user-out resp-bxe))
 
     (define/private (send-exn-to-user e)
-      (box-evt-set! resp-header-bxe (lambda () (raise e)))
+      (box-evt-set! resp-bxe (lambda () (raise e)))
       (box-evt-set! trailerbxe (lambda () (raise e)))
       (raise-user-exn e))
 
@@ -407,16 +409,19 @@
     ;; Handling frames from server
 
     (define/public (handle-data data end?)
+      (set-received! 'yes)
       (write-bytes data out-to-user)
       (when end? (close-output-port out-to-user))
       (check-s2-state (if end? 'data+end 'data)))
 
     (define/public (handle-headers header end?)
+      (set-received! 'yes)
       (log-http2-debug "#~s returning header to user" streamid)
-      (box-evt-set! resp-header-bxe (lambda () header))
+      (box-evt-set! resp-bxe (make-response-thunk header))
       (check-s2-state (if end? 'headers+end 'headers)))
 
     (define/public (handle-push_promise promised-streamid header)
+      (set-received! 'yes)
       (send conn handle-push_promise promised-streamid header))
 
     (define/public (handle-rst_stream errorcode)
@@ -430,7 +435,7 @@
       ;; If this streamid > last-streamid, then server has not processed
       ;; this request, and it's okay to auto-retry on new connection.
       (when (> streamid last-streamid)
-        (set! info-for-exn (hash-set info-for-exn 'received 'no)))
+        (set-received! 'no))
       (send-exn-to-user
        (exn:fail:http123 "connection closed by server"
                          (current-continuation-marks)
@@ -527,6 +532,32 @@
       (min (send conn get-config-value 'max-frame-size)
            ;; FIXME: make my preference for max frame size configurable
            (expt 2 20)))
+
+    ;; ----------------------------------------
+    ;; Make response
+
+    (define/private (make-response-thunk header-entries)
+      ;; Create a promise so that work happens in user thread.
+      (define resp-promise
+        (delay/sync
+         (define header
+           (with-handler (lambda (e)
+                           (h2-error "error processing header"
+                                     #:base-info info-for-exn
+                                     #:info (hasheq 'wrapped-exn e)))
+             (make-header-from-entries header-entries)))
+         (unless (send header value-matches? ':status #rx#"[1-5][0-9][0-9]")
+           (h2-error "bad or missing status from server"
+                     #:base-info info-for-exn
+                     #:info (hasheq 'code 'bad-status 'header header)))
+         (define status (send header get-integer-value ':status))
+         (send header remove! ':status)
+         (new http2-response%
+              (status-code status)
+              (header header)
+              (content user-in)
+              (trailerbxe trailerbxe))))
+      (lambda () (force resp-promise)))
 
     ;; ----------------------------------------
     ;; Updating flow window when user consumes data

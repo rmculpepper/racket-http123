@@ -405,7 +405,7 @@
       (define chunk-size (read-chunk-size))
       (cond [(zero? chunk-size)
              (let ([trailers (read-trailer)])
-               (define p (delay (make-header-from-lines trailers)))
+               (define p (delay/sync (make-header-from-lines trailers)))
                (box-evt-set! trailerbxe (lambda () (force p))))
              (close-output-port out-to-user)]
             [else
