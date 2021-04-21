@@ -186,6 +186,10 @@
             (fp:continuation-headerbf (frame-payload fr))))
         (define headerb (apply bytes-append first-headerbf rest-headerbfs))
         (with-handler (lambda (e)
+                        (eprintf "********************\n")
+                        ((error-display-handler) (exn-message e) e)
+                        (eprintf "headerb = ~v\n" headerb)
+                        (eprintf "********************\n")
                         (connection-error
                          error:COMPRESSION_ERROR
                          #:streamid streamid
