@@ -345,3 +345,21 @@
 (define error:ENHANCE_YOUR_CALM #x0B)
 (define error:INADEQUATE_SECURITY #x0C)
 (define error:HTTP_1_1_REQUIRED #x0D)
+
+(define (decode-error-code code)
+  (case code
+    [(#x00) 'NO_ERROR]
+    [(#x01) 'PROTOCOL_ERROR]
+    [(#x02) 'INTERNAL_ERROR]
+    [(#x03) 'FLOW_CONTROL_ERROR]
+    [(#x04) 'SETTINGS_TIMEOUT]
+    [(#x05) 'STREAM_CLOSED]
+    [(#x06) 'FRAME_SIZE_ERROR]
+    [(#x07) 'REFUSED_STREAM]
+    [(#x08) 'CANCEL]
+    [(#x09) 'COMPRESSION_ERROR]
+    [(#x0A) 'CONNECT_ERROR]
+    [(#x0B) 'ENHANCE_YOUR_CALM]
+    [(#x0C) 'INADEQUATE_SECURITY]
+    [(#x0D) 'HTTP_1_1_REQUIRED]
+    [else #f]))

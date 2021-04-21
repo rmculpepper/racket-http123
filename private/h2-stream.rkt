@@ -51,7 +51,7 @@
 
     (define/private (stream-error errorcode #:raise [e #f])
       (queue-frame (frame type:RST_STREAM 0 streamid (fp:rst_stream errorcode)))
-      (send s2 signal-error e))
+      (send s2 signal-error errorcode e))
 
     ;; ----------------------------------------
     ;; Flow windows
@@ -146,24 +146,24 @@
            [else (my-error)])]
         [(reserved/remote)
          (case transition
-           [(rst_stream) (set-state! 'closed)]
+           [(rst_stream) (set-state! 'closed/by-me-recently)]
            [(window_update) (void)]
            [else (my-error)])]
         [(open)
          (case transition
            [(end_stream) (set-state! 'half-closed/local)]
-           [(rst_stream) (set-state! 'closed)]
+           [(rst_stream) (set-state! 'closed/by-me-recently)]
            ;; RFC says "any type"
            [(data headers push_promise window_update) (void)]
            [else (error 'check-state "internal error s1: transition = ~e" transition)])]
         [(half-closed/local)
          (case transition
            [(window_update) (void)]
-           [(rst_stream) (set-state! 'closed)]
+           [(rst_stream) (set-state! 'closed/by-me-recently)]
            [else (error 'check-state "internal error s2: transition = ~e" transition)])]
         [(half-closed/remote)
          (case transition
-           [(rst_stream) (set-state! 'closed)]
+           [(rst_stream) (set-state! 'closed/by-me-recently)]
            ;; RFC says "any type"
            [(data headers push_promise window_update) (void)]
            [else (stream-error error:STREAM_CLOSED)])]
@@ -226,6 +226,10 @@
       (unless (< out-flow-window FLOW-WINDOW-BOUND)
         (stream-error error:FLOW_CONTROL_ERROR)))
 
+    (define/public (handle-user-abort)
+      ;; FIXME: raise better exn?
+      (stream-error error:CANCEL))
+
     ;; ----------------------------------------
     ;; Sending frames to the server
 
@@ -255,8 +259,8 @@
 
 (define stream-level2%
   (class object%
-    (init-field s1 streamid conn)
-    (init req send-req?)
+    (init-field s1 streamid conn req)
+    (init send-req?)
     (super-new)
 
     ;; ============================================================
@@ -398,7 +402,7 @@
     (define trailerbxe (make-box-evt))
 
     (define/public (get-user-communication)
-      (values user-out resp-bxe))
+      (values (make-pump-data-out) resp-bxe))
 
     (define/private (send-exn-to-user e)
       (box-evt-set! resp-bxe (lambda () (raise e)))
@@ -442,10 +446,16 @@
                          (hash-set* info-for-exn 'code 'GOAWAY)))
       (set-s2-state! 'done))
 
-    (define/public (signal-error e)
-      (send-exn-to-user e)
+    (define/public (signal-error errorcode e)
+      (send-exn-to-user (or e (make-stream-exn errorcode)))
       (set-s2-state! 'done)
       (raise 'stream-error))
+
+    (define/private (make-stream-exn errorcode)
+      (define code (or (decode-error-code errorcode) 'unknown-stream-error))
+      (exn:fail:http123 "stream closed by user agent"
+                        #:info (hasheq 'code code 'http2-errorcode errorcode)
+                        #:base-info info-for-exn))
 
     ;; ----------------------------------------
     ;; Send request
@@ -504,6 +514,31 @@
     ;; ----------------------------------------
     ;; Sending request data from user
 
+    (define/private (make-pump-data-out)
+      (define data (request-data req))
+      (cond [(not data)
+             (lambda ()
+               (close-output-port user-out))]
+            [(bytes? data)
+             (lambda ()
+               (write-bytes data user-out)
+               (close-output-port user-out))]
+            [else
+             (lambda ()
+               (with-handler (lambda (e)
+                               (register-abort-request)
+                               (raise e))
+                 (call-with-continuation-barrier
+                  (lambda ()
+                    (data (lambda (data-bs) (write-bytes data-bs user-out)))
+                    (close-output-port user-out)))))]))
+
+    (define/private (register-abort-request) ;; called in user thread
+      (send conn register-user-abort-request s1))
+
+    ;; ----------------------------------------
+    ;; Sending request data from user
+
     (define/private (send-request-data-from-user)
       ;; PRE: in-from-user is ready for input
       (define (check-at-eof?) ;; check for EOF w/o blocking
@@ -522,11 +557,6 @@
               [(< r len) (send-data (subbytes buf 0 r) end?)]
               [else (send-data buf end?)])
         (unless end? (loop (- allowed-len r)))))
-
-    ;; FIXME: give user a way to signal to abort request
-    (define/private (abort-request-data)
-      (queue-frame (frame type:RST_STREAM 0 null (fp:rst_stream error:CANCEL)))
-      (set-s2-state! 'done))
 
     (define/private (get-max-data-payload-length)
       (min (send conn get-config-value 'max-frame-size)

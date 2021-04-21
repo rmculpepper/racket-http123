@@ -380,8 +380,8 @@
     (define reader-thread (thread (lambda () (reader))))
 
     ;; ========================================
+    ;; Methods called from user thread
 
-    ;; called by user thread
     (define/public (open-request req)
       (define streambxe (make-box-evt))
       (thread-send manager-thread
@@ -394,23 +394,18 @@
                    (lambda () #f))
       (define stream ((sync streambxe)))
       ;; Stream automatically sends request header.
-      (define-values (user-out resp-bxe)
+      (define-values (pump-data-out resp-bxe)
         (send stream get-user-communication))
       ;; User thread writes request content.
       ;; FIXME: optimize, send short data bytes on stream initialization
-      (match (request-data req)
-        [(? bytes? data)
-         (write-bytes data user-out)
-         (close-output-port user-out)]
-        [#f (close-output-port user-out)]
-        [(? procedure? put-data)
-         ;; FIXME: on escape, abort request???
-         (call-with-continuation-barrier
-          (lambda ()
-            (put-data (lambda (data) (write-bytes data user-out)))
-            (close-output-port user-out)))])
+      (pump-data-out)
       ;; Get response header. (Note: may receive raised-exception instead!)
       resp-bxe)
+
+    (define/public (register-user-abort-request stream)
+      (thread-send manager-thread
+                   (lambda () (send stream handle-user-abort))
+                   void))
 
     ;; ========================================
 
