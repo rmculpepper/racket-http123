@@ -249,9 +249,12 @@
       (for ([fr (in-list frs)]) (queue-frame fr)))
     ))
 
+;; ============================================================
+
 (define stream-level2%
   (class object%
-    (init-field s1 streamid conn req send-req?)
+    (init-field s1 streamid conn)
+    (init req send-req?)
     (super-new)
 
     ;; ============================================================
@@ -266,24 +269,18 @@
     ;; This layer cares about HTTP and communicating with the user.
 
     ;; An S2State is one of
-    ;; - 'uninitialized
     ;; - 'before-request            -- none
     ;; - 'sending-request-data      -- pump in-from-user to server (mod flow-window)
     ;; - 'before-response           -- none
     ;; - 'reading-response-data     -- pump server data to out-to-user (adj flow-window)
     ;; - 'done                      -- whether successful or not
 
-    (define s2-state 'uninitialized)   ;; S2State
+    (define s2-state 'before-request)   ;; S2State
 
     (define/public (check-s2-state transition)
       ;; A transition does not include push_promise or rst_stream.
       (define (bad) (error 'check-s2-state "bad transition: ~e" transition)) ;; FIXME
       (case s2-state
-        [(uninitialized)
-         (case transition
-           [(start-request)     (set-s2-state! 'before-request)]
-           [(skip-request)      (set-s2-state! 'before-response)]
-           [else (bad)])]
         [(before-request)
          (case transition
            [(user-request)      (set-s2-state! 'sending-request-data)]
@@ -316,14 +313,10 @@
         [(before-response)       (teardown:before-response)]
         [(reading-response-data) (teardown:reading-response-data)])
       (case new-s2-state
-        [(before-request)        (setup:before-request)]
         [(sending-request-data)  (setup:sending-request-data)]
         [(before-response)       (setup:before-response)]
         [(reading-response-data) (setup:reading-response-data)]
         [(done)                  (setup:done)]))
-
-    (define/public (setup:before-request)
-      (set-work-evt! (handle-evt always-evt (lambda (ignored) (send-request)))))
 
     (define/public (teardown:before-request)
       (set-work-evt! never-evt))
@@ -452,7 +445,14 @@
     ;; ----------------------------------------
     ;; Send request
 
-    (define/private (send-request)
+    ;; Must send the request immediately upon creating the stream, otherwise if
+    ;; we create two streams and send the later streamid's request first, it
+    ;; implicitly closes the earlier stream! (See HTTP/2 spec.)
+
+    ;; Another alternative would be to delay allocating the streamid until
+    ;; sending the request.
+
+    (define/private (send-request req)
       (match-define (request method url header data) req)
       (log-http2-debug "#~s initiating ~s request" streamid method)
       (define pseudo-header (make-pseudo-header method url))
@@ -554,6 +554,6 @@
     ;; ============================================================
     ;; Finish initialization
 
-    (cond [send-req? (check-s2-state 'start-request)]
-          [else (check-s2-state 'skip-request)])
+    (cond [send-req? (send-request req)]
+          [else (check-s2-state 'user-request+end)])
     ))
