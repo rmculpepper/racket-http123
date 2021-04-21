@@ -329,27 +329,34 @@
                                        (lambda (e)
                                          ((error-display-handler) (exn-message e) e))])
                         (handle-frame-or-other fr)))))
-      (define (streamsloop)
+      (define manager-bored-evt
+        (wrap-evt (if #f
+                      (guard-evt
+                       (lambda ()
+                         (alarm-evt (+ (current-inexact-milliseconds) #e1e4))))
+                      never-evt)
+                  (lambda (ignored) (log-http2-debug "manager is bored!"))))
+      ;; ----
+      (define (loop/streams-changed)
         (define work-evts
           (for/list ([stream (in-hash-values stream-table)])
             (send stream get-work-evt)))
         (log-http2-debug "manager updating work evts (~s)" (length work-evts))
         (define streams-evt (apply choice-evt work-evts))
-        (let loop ()
-          #;(log-http2-debug "manager loop")
-          (with-handlers ([(lambda (e) (eq? e 'escape-without-error)) void]
-                          [(lambda (e) (eq? e 'stream-error)) void])
-            (sync streams-evt
-                  reader-evt
-                  #;(wrap-evt (alarm-evt (+ (current-inexact-milliseconds) 10000.0))
-                              (lambda (ignored) (log-http2-debug "manager is bored!")))))
-          (flush-frames)
-          (if (begin0 streams-changed? (set! streams-changed? #f))
-              (streamsloop)
-              (loop))))
+        (loop streams-evt))
+      (define (loop streams-evt)
+        (with-handlers ([(lambda (e) (eq? e 'escape-without-error)) void]
+                        [(lambda (e) (eq? e 'stream-error)) void])
+          (sync streams-evt
+                reader-evt
+                manager-bored-evt))
+        (flush-frames)
+        (if (begin0 streams-changed? (set! streams-changed? #f))
+            (loop/streams-changed)
+            (loop streams-evt)))
       (with-handlers ([(lambda (e) (eq? e 'connection-error))
                        (lambda (e) (log-http2-debug "manager stopped due to connection error"))])
-        (streamsloop)))
+        (loop/streams-changed)))
 
     (define/private (reader)
       (cond [(eof-object? (peek-byte in))
