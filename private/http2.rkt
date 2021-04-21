@@ -56,6 +56,9 @@
     (define/public (get-config) config)
     (define/public (get-my-config) my-config)
 
+    (define/public (get-config-value key)
+      (hash-ref config key))
+
     ;; Connection-wide limit on flow-controlled {sends, receives}.
     ;; Flow control is only applied to DATA frames (see 6.9).
     (define out-flow-window INIT-FLOW-WINDOW)
@@ -306,8 +309,8 @@
     ;; Manager thread
     ;; - receives frames from reader thread, handles
     ;; - receives work from streams/users, handles
-    ;; - must not call any user-supplied procedures, or block on any ports (okay
-    ;;   to write to out)
+    ;; - must not call any user-supplied procedures, or block on any
+    ;;   ports, except okay to write to out (?)
     ;; Reader thread
     ;; - just reads frames from input, sends to manager
 

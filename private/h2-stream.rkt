@@ -18,7 +18,7 @@
 (define http2-stream%
   (class* object% ()
     (init-field conn streamid)
-    (init req send-req?)
+    (init-field req send-req?)
     (super-new)
 
     (define/public (client-originated?) (odd? streamid))
@@ -164,8 +164,7 @@
       (when (and (state:closed? new-state) (not (state:closed? old-state)))
         ;; Remove this connection's contribution to global target in-flow-window.
         (send conn adjust-target-in-flow-window (max 0 (- in-flow-window)))
-        (set! in-flow-window 0))
-      (s2:set-state! old-state new-state))
+        (set! in-flow-window 0)))
 
     (define/private (state:closed? state)
       (case state
@@ -235,27 +234,33 @@
       ;; FIXME: avoid sending multiple RST_STREAM frames, etc
       (send conn queue-frame fr))
 
+    (define/private (queue-frames frs)
+      (for ([fr (in-list frs)]) (queue-frame fr)))
+
     ;; ============================================================
     ;; Stream Layer 2
 
     ;; This layer cares about HTTP and communicating with the user.
 
     ;; An S2State is one of
+    ;; - 'uninitialized
     ;; - 'before-request            -- none
     ;; - 'sending-request-data      -- pump in-from-user to server (mod flow-window)
     ;; - 'before-response           -- none
     ;; - 'reading-response-data     -- pump server data to out-to-user (adj flow-window)
     ;; - 'done                      -- whether successful or not
 
-    (define s2-state 'before-request)   ;; S2State
-
-    (define/public (s2:set-state! old-state1 new-state1)
-      (void))
+    (define s2-state 'uninitialized)   ;; S2State
 
     (define/public (check-s2-state transition)
       ;; A transition does not include push_promise or rst_stream.
       (define (bad) (error 'check-s2-state "bad transition: ~e" transition)) ;; FIXME
       (case s2-state
+        [(uninitialized)
+         (case transition
+           [(start-request)     (set-s2-state! 'before-request)]
+           [(skip-request)      (set-s2-state! 'before-response)]
+           [else (bad)])]
         [(before-request)
          (case transition
            [(user-request)      (set-s2-state! 'sending-request-data)]
@@ -288,91 +293,54 @@
         [(before-response)       (teardown:before-response)]
         [(reading-response-data) (teardown:reading-response-data)])
       (case new-s2-state
+        [(before-request)        (setup:before-request)]
         [(sending-request-data)  (setup:sending-request-data)]
         [(before-response)       (setup:before-response)]
         [(reading-response-data) (setup:reading-response-data)]
         [(done)                  (setup:done)]))
 
-    (define/public (teardown:before-request) (void))
+    (define/public (setup:before-request)
+      (set-work-evt! (handle-evt always-evt (lambda (ignored) (send-request)))))
+
+    (define/public (teardown:before-request)
+      (set-work-evt! never-evt))
 
     (define/public (setup:sending-request-data)
-      (set! s2-work-evt
-            (handle-evt (guard-evt
-                         (lambda ()
-                           (cond [(port-closed? in-from-user)
-                                  ;; We read an EOF (user-out is closed), so
-                                  ;; in-from-user is always ready now; ignore.
-                                  never-evt]
-                                 [(not (positive? (get-effective-out-flow-window)))
-                                  ;; Only check if out-flow window is nonempty.
-                                  never-evt]
-                                 [else in-from-user])))
-                        (lambda (ignored) (send-request-data-from-user)))))
+      (set-work-evt!
+       (handle-evt (guard-evt
+                    (lambda ()
+                      (cond [(port-closed? in-from-user)
+                             ;; We read an EOF (user-out is closed), so
+                             ;; in-from-user is always ready now; ignore.
+                             never-evt]
+                            [(not (positive? (get-effective-out-flow-window)))
+                             ;; Only check if out-flow window is nonempty.
+                             never-evt]
+                            [else in-from-user])))
+                   (lambda (ignored) (send-request-data-from-user)))))
 
     (define/public (teardown:sending-request-data)
       (close-input-port in-from-user)
-      (set! s2-work-evt never-evt))
+      (set-work-evt! never-evt))
 
     (define/public (setup:before-response) (void))
     (define/public (teardown:before-response) (void))
 
     (define/public (setup:reading-response-data)
       (set! info-for-exn (hash-set info-for-exn 'received 'yes))
-      (set! s2-work-evt
-            (handle-evt (guard-evt (lambda () user-in-last-progress-evt))
-                        (lambda (ignored) (update-target-in-flow-window)))))
+      (set-work-evt!
+       (handle-evt (guard-evt (lambda () user-in-last-progress-evt))
+                   (lambda (ignored) (update-target-in-flow-window)))))
 
     (define/public (teardown:reading-response-data)
-      (set! s2-work-evt never-evt))
+      (set-work-evt! never-evt))
 
     (define/public (setup:done)
-      (set! s2-work-evt
-            (handle-evt (alarm-evt (+ (current-inexact-milliseconds) KEEP-AFTER-CLOSE-MS))
-                        (lambda (ignore)
-                          (log-http2-debug "removing closed stream #~s" streamid)
-                          (send conn remove-stream streamid)))))
-
-    ;; ----------------------------------------
-    ;; Initiate request
-
-    (define/private (initiate-request req send-req?)
-      (cond [send-req?
-             (match-define (request method url header data) req)
-             (log-http2-debug "#~s initiating ~s request" streamid method)
-             ;; FIXME: for http2, data must be #f or bytes or 'delayed
-             (define pseudo-header (make-pseudo-header method url))
-             (define enc-header (encode-header (append pseudo-header header)
-                                               (send conn get-sending-dt)))
-             ;; FIXME: split into frames if necessary
-             (define no-content?
-               (or (eq? data #f)
-                   (and (bytes? data) (zero? (bytes-length data)))))
-             (queue-frame
-              (frame type:HEADERS
-                     (+ flag:END_HEADERS (if no-content? flag:END_STREAM 0))
-                     streamid
-                     (fp:headers 0 0 0 enc-header)))
-             ;; FIXME: if small data, send immediately (must check out-flow-window, though)
-             (if no-content?
-                 (check-s2-state 'user-request+end)
-                 (check-s2-state 'user-request))]
-            [else
-             (check-s2-state 'user-request+end)]))
-
-    ;; FIXME: pseudo-header fields MUST appear first, contiguous
-    ;; FIXME: 8.1.2.2 forbids Connection header, others
-    (define/private (make-pseudo-header method u)
-      (list (list #":method" (symbol->bytes method))
-            (list #":scheme" (string->bytes/utf-8 (url-scheme u)))
-            (list #":authority" (url-authority->bytes u)) ;; SHOULD use instead of Host
-            (list #":path" (url-path/no-fragment->bytes u))))
-
-    (define/private (url-path/no-fragment->bytes u)
-      (string->bytes/utf-8
-       (url->string (url #f #f #f #f (url-path-absolute? u) (url-path u) (url-query u) #f))))
-    (define/private (url-authority->bytes u)
-      (string->bytes/utf-8
-       (if (url-port u) (format "~a:~a" (url-host u) (url-port u)) (url-host u))))
+      (set-work-evt!
+       (handle-evt (alarm-evt (+ (current-inexact-milliseconds) KEEP-AFTER-CLOSE-MS))
+                   (lambda (ignore)
+                     (log-http2-debug "removing closed stream #~s" streamid)
+                     (send conn remove-stream streamid)))))
 
     ;; ----------------------------------------
 
@@ -380,6 +348,9 @@
     ;; available to be done on this stream (and to do it).
     ;; Determined by on s2-state.
     (define s2-work-evt never-evt)  ;; Evt[Void]
+
+    (define/private (set-work-evt! evt)
+      (set! s2-work-evt evt))
 
     (define/public (get-work-evt)
       ;; Use guard-evt so manager automatically gets state changes without
@@ -456,6 +427,53 @@
       (raise 'stream-error))
 
     ;; ----------------------------------------
+    ;; Send request
+
+    (define/private (send-request)
+      (match-define (request method url header data) req)
+      (log-http2-debug "#~s initiating ~s request" streamid method)
+      (define pseudo-header (make-pseudo-header method url))
+      (define enc-header (encode-header (append pseudo-header header)
+                                        (send conn get-sending-dt)))
+      (define no-content?
+        (or (eq? data #f)
+            (and (bytes? data) (zero? (bytes-length data)))))
+      ;; FIXME: split into frames if necessary
+      (queue-frames (make-header-frames enc-header no-content?))
+      (if no-content?
+          (check-s2-state 'user-request+end)
+          (check-s2-state 'user-request)))
+
+    (define/private (make-header-frames enc-header no-content?)
+      (define len (bytes-length enc-header))
+      (define frame-size (send conn get-config-value 'max-frame-size))
+      ;; Note: if padding or priority flags set, must adjust frame-size!
+      (for/list ([start (in-range 0 len frame-size)] [index (in-naturals)])
+        (define end (min (+ start frame-size) len))
+        (define flags
+          (cond [(< end len) 0]
+                [else (+ flag:END_HEADERS (if no-content? flag:END_STREAM 0))]))
+        (define headerbf (subbytes enc-header start end))
+        (if (zero? index)
+            (frame type:HEADERS flags streamid (fp:headers 0 0 0 headerbf))
+            (frame type:CONTINUATION flags streamid (fp:continuation headerbf)))))
+
+    ;; FIXME: pseudo-header fields MUST appear first, contiguous
+    ;; FIXME: 8.1.2.2 forbids Connection header, others
+    (define/private (make-pseudo-header method u)
+      (list (list #":method" (symbol->bytes method))
+            (list #":scheme" (string->bytes/utf-8 (url-scheme u)))
+            (list #":authority" (url-authority->bytes u)) ;; SHOULD use instead of Host
+            (list #":path" (url-path/no-fragment->bytes u))))
+
+    (define/private (url-path/no-fragment->bytes u)
+      (string->bytes/utf-8
+       (url->string (url #f #f #f #f (url-path-absolute? u) (url-path u) (url-query u) #f))))
+    (define/private (url-authority->bytes u)
+      (string->bytes/utf-8
+       (if (url-port u) (format "~a:~a" (url-host u) (url-port u)) (url-host u))))
+
+    ;; ----------------------------------------
     ;; Sending request data from user
 
     (define/private (send-request-data-from-user)
@@ -509,5 +527,8 @@
       delta)
 
     ;; ============================================================
-    (initiate-request req send-req?)
+    ;; Finish initialization
+
+    (cond [send-req? (check-s2-state 'start-request)]
+          [else (check-s2-state 'skip-request)])
     ))

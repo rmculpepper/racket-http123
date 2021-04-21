@@ -99,7 +99,7 @@
      (bytes-length bs)]))
 
 (define (trim-streamid n)
-  (bitwise-bit-field n 0 30))
+  (bitwise-bit-field n 0 31))
 
 ;; ----------------------------------------
 
