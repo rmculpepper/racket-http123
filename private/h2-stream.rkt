@@ -18,12 +18,24 @@
 (define http2-stream%
   (class* object% ()
     (init-field conn streamid)
-    (init-field req send-req?)
+    (init req send-req?)
     (super-new)
+
+    (field [state 'idle]) ;; StreamState, see below
+    (field [s2 (new stream-level2% (s1 this) (streamid streamid) (conn conn)
+                    (req req) (send-req? send-req?))])
 
     (define/public (client-originated?) (odd? streamid))
     (define/public (server-originated?) (even? streamid))
     (define/public (originator) (if (client-originated?) 'client 'server))
+
+    ;; ============================================================
+    ;; Methods forwarded to Stream Layer 2
+
+    (define/public (get-user-communication)
+      (send s2 get-user-communication))
+    (define/public (get-work-evt)
+      (send s2 get-work-evt))
 
     ;; ============================================================
     ;; Stream Layer 1
@@ -37,7 +49,7 @@
 
     (define/private (stream-error errorcode #:raise [e #f])
       (queue-frame (frame type:RST_STREAM 0 streamid (fp:rst_stream errorcode)))
-      (s2:error e))
+      (send s2 signal-error e))
 
     ;; ----------------------------------------
     ;; Flow windows
@@ -49,10 +61,12 @@
     (define/public (get-effective-out-flow-window)
       (min out-flow-window (send conn get-out-flow-window)))
 
-    (define/public (adjust-in-flow-window delta)
+    (define/public (adjust-in-flow-window delta actual?)
       (set! in-flow-window (+ in-flow-window delta))
       ;; FIXME: check for negative window error
-      (send conn adjust-in-flow-window delta))
+      (if actual?
+          (send conn adjust-in-flow-window delta)
+          (send conn adjust-target-flow-window delta)))
 
     ;; ----------------------------------------
     ;; Finite state machine
@@ -65,8 +79,6 @@
     ;; - 'half-closed/remote    S C
     ;; - 'half-closed/local     S C
     ;; - 'closed                S C -- actually, split close into 4 kinds
-
-    (field [state 'idle]) ;; StreamState
 
     (define/private (check-state transition)
       ;; Section 5.1
@@ -163,8 +175,7 @@
       (set! state new-state)
       (when (and (state:closed? new-state) (not (state:closed? old-state)))
         ;; Remove this connection's contribution to global target in-flow-window.
-        (send conn adjust-target-in-flow-window (max 0 (- in-flow-window)))
-        (set! in-flow-window 0)))
+        (adjust-in-flow-window (max 0 (- in-flow-window)) #f)))
 
     (define/private (state:closed? state)
       (case state
@@ -178,17 +189,17 @@
       (match-define (fp:data padlen data) payload)
       (check-state 'data)
       (let ([len (payload-length flags payload)])
-        (adjust-in-flow-window (- len)))
+        (adjust-in-flow-window (- len) #t))
       (define end? (flags-has? flags flag:END_STREAM))
       (when end? (check-state 'end_stream))
-      (s2:handle-data data end?))
+      (send s2 handle-data data end?))
 
     (define/public (handle-headers-payload flags payload)
       (match-define (fp:headers padlen _streamdep _weight hs) payload)
       (check-state 'headers)
       (define end? (flags-has? flags flag:END_STREAM))
       (when end? (check-state 'end_stream))
-      (s2:handle-headers hs end?))
+      (send s2 handle-headers hs end?))
 
     (define/public (handle-priority-payload flags payload)
       (match-define (fp:priority streamdep weight) payload)
@@ -198,15 +209,15 @@
     (define/public (handle-push_promise-payload flags payload)
       (match-define (fp:push_promise padlen promised-streamid header) payload)
       (check-state 'push_promise)
-      (s2:handle-push_promise promised-streamid header))
+      (send s2 handle-push_promise promised-streamid header))
 
     (define/public (handle-rst_stream errorcode)
       (check-state 'rst_stream)
-      (s2:handle-rst_stream errorcode))
+      (send s2 handle-rst_stream errorcode))
 
     (define/public (handle-goaway last-streamid errorcode debug)
       (check-state 'rst_stream) ;; pretend
-      (s2:handle-goaway last-streamid errorcode debug))
+      (send s2 handle-goaway last-streamid errorcode debug))
 
     (define/public (handle-window_update flags increment)
       (set! out-flow-window (+ out-flow-window increment))
@@ -216,7 +227,7 @@
     ;; ----------------------------------------
     ;; Sending frames to the server
 
-    (define/private (queue-frame fr)
+    (define/public (queue-frame fr)
       (match (frame-type fr)
         [(== type:DATA)
          (check-send-state 'data)
@@ -234,8 +245,20 @@
       ;; FIXME: avoid sending multiple RST_STREAM frames, etc
       (send conn queue-frame fr))
 
-    (define/private (queue-frames frs)
+    (define/public (queue-frames frs)
       (for ([fr (in-list frs)]) (queue-frame fr)))
+    ))
+
+(define stream-level2%
+  (class object%
+    (init-field s1 streamid conn req send-req?)
+    (super-new)
+
+    ;; ============================================================
+    ;; Methods forwarded to Stream Layer 1
+
+    (define/public (queue-frame fr) (send s1 queue-frame fr))
+    (define/public (queue-frames frs) (send s1 queue-frames frs))
 
     ;; ============================================================
     ;; Stream Layer 2
@@ -313,7 +336,7 @@
                              ;; We read an EOF (user-out is closed), so
                              ;; in-from-user is always ready now; ignore.
                              never-evt]
-                            [(not (positive? (get-effective-out-flow-window)))
+                            [(not (positive? (send s1 get-effective-out-flow-window)))
                              ;; Only check if out-flow window is nonempty.
                              never-evt]
                             [else in-from-user])))
@@ -390,27 +413,27 @@
     ;; ----------------------------------------
     ;; Handling frames from server
 
-    (define/public (s2:handle-data data end?)
+    (define/public (handle-data data end?)
       (write-bytes data out-to-user)
       (when end? (close-output-port out-to-user))
       (check-s2-state (if end? 'data+end 'data)))
 
-    (define/public (s2:handle-headers header end?)
+    (define/public (handle-headers header end?)
       (log-http2-debug "#~s returning header to user" streamid)
       (box-evt-set! resp-header-bxe (lambda () header))
       (check-s2-state (if end? 'headers+end 'headers)))
 
-    (define/public (s2:handle-push_promise promised-streamid header)
+    (define/public (handle-push_promise promised-streamid header)
       (send conn handle-push_promise promised-streamid header))
 
-    (define/public (s2:handle-rst_stream errorcode)
+    (define/public (handle-rst_stream errorcode)
       (send-exn-to-user
        (exn:fail:http123 "stream closed by server"
                          (current-continuation-marks)
                          (hash-set* info-for-exn 'code 'RST_STREAM)))
       (set-s2-state! 'done))
 
-    (define/public (s2:handle-goaway last-streamid errorcode debug)
+    (define/public (handle-goaway last-streamid errorcode debug)
       ;; If this streamid > last-streamid, then server has not processed
       ;; this request, and it's okay to auto-retry on new connection.
       (when (> streamid last-streamid)
@@ -421,7 +444,7 @@
                          (hash-set* info-for-exn 'code 'GOAWAY)))
       (set-s2-state! 'done))
 
-    (define/public (s2:error e)
+    (define/public (signal-error e)
       (send-exn-to-user e)
       (set-s2-state! 'done)
       (raise 'stream-error))
@@ -482,17 +505,20 @@
         (eof-object? (peek-bytes-avail!* (make-bytes 1) 0 #f in-from-user)))
       (define (send-data data end?)
         (queue-frame (frame type:DATA (if end? flag:END_STREAM 0) streamid data))
-        ;; On EOF, close in-from-user so evt will ignore it.
+        ;; On EOF, close in-from-user so work-evt will ignore it.
         (when end? (close-input-port in-from-user)))
-      (define len (min (get-effective-out-flow-window)
-                       (get-max-data-payload-length)))
-      ((with-handlers ([exn? (lambda (e) (abort-request-data) (lambda () (void)))])
-         (define buf (make-bytes len))
-         (define r (read-bytes-avail!* buf in-from-user))
-         (cond [(eof-object? r) (lambda () (send-data #"" #t))]
-               [(< r len) (lambda () (send-data (subbytes buf 0 r) (check-at-eof?)))]
-               [else (lambda () (send-data buf (check-at-eof?)))]))))
+      (define allowed-len (send s1 get-effective-out-flow-window))
+      (let loop ([allowed-len allowed-len])
+        (define len (min allowed-len (get-max-data-payload-length)))
+        (define buf (make-bytes len))
+        (define r (read-bytes-avail!* buf in-from-user))
+        (define end? (or (eof-object? r) (check-at-eof?)))
+        (cond [(eof-object? r) (send-data #"" #t)]
+              [(< r len) (send-data (subbytes buf 0 r) end?)]
+              [else (send-data buf end?)])
+        (unless end? (loop (- allowed-len r)))))
 
+    ;; FIXME: give user a way to signal to abort request
     (define/private (abort-request-data)
       (queue-frame (frame type:RST_STREAM 0 null (fp:rst_stream error:CANCEL)))
       (set-s2-state! 'done))
@@ -513,9 +539,8 @@
              (check-s2-state 'end)]
             [else ;; want increment more data
              (define delta (update-user-in-mark/get-delta))
-             (set! in-flow-window (+ in-flow-window delta))
              (queue-frame (frame type:WINDOW_UPDATE 0 streamid (fp:window_update delta)))
-             (send conn adjust-target-flow-window delta)]))
+             (send s1 adjust-in-flow-window delta #f)]))
 
     (define/private (update-user-in-mark/get-delta)
       ;; FIXME: get file-position and port-progress-evt atomically ??

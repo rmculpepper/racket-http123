@@ -289,12 +289,12 @@
       (unless (< out-flow-window FLOW-WINDOW-BOUND)
         (connection-error error:FLOW_CONTROL_ERROR "window too large")))
 
-    (define/public (adjust-in-flow-window increment)
-      (set! in-flow-window (+ in-flow-window)))
+    (define/public (adjust-in-flow-window delta)
+      (set! in-flow-window (+ in-flow-window delta)))
 
-    (define/public (adjust-target-flow-window increment)
+    (define/public (adjust-target-flow-window delta)
       ;; FIXME: sending window_update frame is delayed until... ???
-      (set! target-in-flow-window (+ target-in-flow-window increment)))
+      (set! target-in-flow-window (+ target-in-flow-window delta)))
 
     (define/private (after-handle-frame)
       (when (< in-flow-window target-in-flow-window)
