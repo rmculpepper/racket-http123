@@ -93,6 +93,27 @@
              #:when (and v (not (hash-has-key? info k))))
     (hash-set info k v)))
 
+(define (build-exn base-message info [cms (current-continuation-marks)])
+  (define who (http123-who (hash-ref info 'who #f)))
+  (define details (info-details info))
+  (define message (format "~a: ~a~a" who base-message details))
+  (exn:fail:http123 message cms info))
+
+(define (info-details info)
+  (define (detail key)
+    (cond [(hash-has-key? info key) (format "\n  ~a: ~e" key (hash-ref info key))]
+          [else ""]))
+  (string-append
+   (detail 'code)
+   (detail 'request)
+   (detail 'received)
+   (detail 'version)
+   (cond [(hash-ref info 'wrapped-exn #f)
+          => (lambda (e) (if (exn? e)
+                             (format "\n  wrapped error: ~e" (exn-message e))
+                             ""))]
+         [else ""])))
+
 ;; ============================================================
 ;; Exceptions
 

@@ -155,7 +155,9 @@
 
     (define/private (handle-frame-or-other v)
       (match v
-        [(? frame? fr) (handle-frame fr)]
+        [(? frame? fr)
+         (handle-frame fr)
+         (after-handle-frame)]
         ['EOF (unless closed?
                 ;; FIXME: update all streams like goaway?
                 (set-closed! 'EOF))]
@@ -220,7 +222,7 @@
          (match type
            [(== type:DATA)
             (check-stream-nonzero)
-            (adjust-in-flow-window (frame-fc-length fr))
+            (adjust-in-flow-window (- (frame-fc-length fr)))
             (send (stream) handle-data-payload flags payload)]
            [(== type:HEADERS)
             (check-stream-nonzero)
@@ -295,11 +297,16 @@
 
     (define/private (after-handle-frame)
       (define target-in-flow-window (get-target-in-flow-window))
+      (log-http2-debug "after-handle-frame: in-fw = ~s, target = ~s"
+                       in-flow-window target-in-flow-window)
       (when (< in-flow-window target-in-flow-window)
         (define delta (- target-in-flow-window in-flow-window))
-        (queue-frame (frame type:WINDOW_UPDATE 0 0 (fp:window_update delta)))
-        (adjust-in-flow-window delta))
-      (flush-frames))
+        (define max-frame-size (hash-ref my-config 'max-frame-size))
+        ;; Only increase window when the difference w/ target is significant.
+        (when (or (< (* 2 max-frame-size) delta)
+                  (< (* 2 in-flow-window) target-in-flow-window))
+          (queue-frame (frame type:WINDOW_UPDATE 0 0 (fp:window_update delta)))
+          (adjust-in-flow-window delta))))
 
     ;; ------------------------------------------------------------
     ;; Flow control

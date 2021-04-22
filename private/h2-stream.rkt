@@ -53,9 +53,10 @@
     (define/private (connection-error errorcode [debug #""])
       (send conn connection-error errorcode debug))
 
-    (define/private (stream-error errorcode #:raise [e #f])
+    (define/private (stream-error errorcode #:message [msg #f] #:raise [e #f])
+      (log-http2-debug "stream error, code = ~s, message = ~e" errorcode msg)
       (queue-frame (frame type:RST_STREAM 0 streamid (fp:rst_stream errorcode)))
-      (send s2 signal-error errorcode e))
+      (send s2 signal-error errorcode msg e))
 
     ;; ----------------------------------------
     ;; Flow windows
@@ -85,7 +86,8 @@
     ;; - 'open                  S C
     ;; - 'half-closed/remote    S C
     ;; - 'half-closed/local     S C
-    ;; - 'closed                S C -- actually, split close into 4 kinds
+    ;; - 'closed/by-me-recently S C -- server might not know closed yet
+    ;; - 'closed                S C -- server knows closed
 
     (define/private (check-state transition)
       ;; Section 5.1
@@ -125,12 +127,6 @@
            [(rst_stream) (set-state! 'closed)]
            [(window_update) (void)]
            [else (stream-error error:STREAM_CLOSED)])]
-        ;; Many flavors of closed state...
-        ;; FIXME: no longer used?!
-        [(closed/by-peer-rst)
-         (stream-error error:STREAM_CLOSED)]
-        [(closed/by-peer-end)
-         (connection-error error:STREAM_CLOSED)]  ;; Why connection error?
         [(closed/by-me-recently)
          ;; Must ignore frames received in this state.
          (raise 'escape-without-error)]))
@@ -138,8 +134,9 @@
     (define/private (check-send-state transition)
       ;; Section 5.1
       (define (my-error)
-        (error 'http2 "internal error: bad send state tx\n  state: ~s\n  tx: ~e"
-               state transition))
+        (define fmt "internal error: bad send state transition\n  state: ~e\n  transition: ~e")
+        (define msg (format fmt state transition))
+        (stream-error error:INTERNAL_ERROR #:message msg))
       (case state
         [(idle)
          (case transition
@@ -173,18 +170,18 @@
            ;; RFC says "any type"
            [(data headers push_promise window_update) (void)]
            [else (stream-error error:STREAM_CLOSED)])]
-        ;; Many flavors of closed state...
-        [(closed/by-peer-rst) (my-error)]
-        [(closed/by-peer-end) (my-error)]
-        [(closed/by-me-recently) (my-error)]))
+        [(closed closed/by-me-recently) (my-error)]))
 
     (define/private (set-state! new-state)
       (define old-state state)
-      (set! state new-state))
+      (set! state new-state)
+      (when (eq? new-state 'closed)
+        (log-http2-debug "CLOSING NOW")
+        (send conn remove-stream streamid)))
 
     (define/private (state:closed? state)
       (case state
-        [(closed/by-peer-rst closed/by-peer-end closed/by-me-recently) #t]
+        [(closed closed/by-me-recently) #t]
         [else #f]))
 
     ;; ----------------------------------------
@@ -433,9 +430,8 @@
 
     (define/public (handle-rst_stream errorcode)
       (send-exn-to-user
-       (exn:fail:http123 "stream closed by server"
-                         (current-continuation-marks)
-                         (hash-set* info-for-exn 'code 'RST_STREAM)))
+       (build-exn "stream closed by server"
+                  (hash-set* info-for-exn 'code 'RST_STREAM)))
       (set-s2-state! 'done))
 
     (define/public (handle-goaway last-streamid errorcode debug)
@@ -444,21 +440,19 @@
       (when (> streamid last-streamid)
         (set-received! 'no))
       (send-exn-to-user
-       (exn:fail:http123 "connection closed by server"
-                         (current-continuation-marks)
-                         (hash-set* info-for-exn 'code 'GOAWAY)))
+       (build-exn "connection closed by server"
+                  (hash-set* info-for-exn 'code 'GOAWAY)))
       (set-s2-state! 'done))
 
-    (define/public (signal-error errorcode e)
-      (send-exn-to-user (or e (make-stream-exn errorcode)))
+    (define/public (signal-error errorcode msg e)
+      (send-exn-to-user (or e (make-stream-exn errorcode msg)))
       (set-s2-state! 'done)
       (raise 'stream-error))
 
-    (define/private (make-stream-exn errorcode)
+    (define/private (make-stream-exn errorcode msg)
       (define code (or (decode-error-code errorcode) 'unknown-stream-error))
-      (exn:fail:http123 "stream closed by user agent"
-                        #:info (hasheq 'code code 'http2-errorcode errorcode)
-                        #:base-info info-for-exn))
+      (build-exn (or msg "stream closed by user agent")
+                 (hash-set* info-for-exn 'code code 'http2-errorcode errorcode)))
 
     ;; ----------------------------------------
     ;; Send request
