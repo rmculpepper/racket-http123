@@ -354,7 +354,7 @@
 (define error:INADEQUATE_SECURITY #x0C)
 (define error:HTTP_1_1_REQUIRED #x0D)
 
-(define (decode-error-code code)
+(define (decode-error-code code [default 'unknown])
   (case code
     [(#x00) 'NO_ERROR]
     [(#x01) 'PROTOCOL_ERROR]
@@ -370,4 +370,4 @@
     [(#x0B) 'ENHANCE_YOUR_CALM]
     [(#x0C) 'INADEQUATE_SECURITY]
     [(#x0D) 'HTTP_1_1_REQUIRED]
-    [else #f]))
+    [else default]))

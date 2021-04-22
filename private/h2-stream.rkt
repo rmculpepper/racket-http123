@@ -53,10 +53,10 @@
     (define/private (connection-error errorcode [debug #""])
       (send conn connection-error errorcode debug))
 
-    (define/private (stream-error errorcode #:message [msg #f] #:raise [e #f])
+    (define/private (stream-error errorcode #:message [msg #f])
       (log-http2-debug "stream error, code = ~s, message = ~e" errorcode msg)
       (queue-frame (frame type:RST_STREAM 0 streamid (fp:rst_stream errorcode)))
-      (send s2 signal-error errorcode msg e))
+      (send s2 signal-ua-error errorcode msg))
 
     ;; ----------------------------------------
     ;; Flow windows
@@ -176,7 +176,7 @@
       (define old-state state)
       (set! state new-state)
       (when (eq? new-state 'closed)
-        (log-http2-debug "CLOSING NOW")
+        (log-http2-debug "removing stream #~s closed by server" streamid)
         (send conn remove-stream streamid)))
 
     (define/private (state:closed? state)
@@ -227,6 +227,14 @@
     (define/public (handle-user-abort)
       ;; FIXME: raise better exn?
       (stream-error error:CANCEL))
+
+    (define/public (handle-ua-connection-error errorcode comment)
+      (define msg (format "user agent signaled connection error\n  reason: ~a" comment))
+      (send s2 signal-ua-error errorcode msg))
+
+    (define/public (handle-eof)
+      (check-state 'rst_stream) ;; pretend
+      (send s2 handle-eof))
 
     ;; ----------------------------------------
     ;; Sending frames to the server
@@ -360,7 +368,7 @@
       (set-work-evt!
        (handle-evt (alarm-evt (+ (current-inexact-milliseconds) KEEP-AFTER-CLOSE-MS))
                    (lambda (ignore)
-                     (log-http2-debug "removing closed stream #~s" streamid)
+                     (log-http2-debug "removing stream #~s closed after delay" streamid)
                      (send conn remove-stream streamid)))))
 
     ;; ----------------------------------------
@@ -384,7 +392,7 @@
               'streamid streamid
               'received 'unknown))
 
-    (define/private (set-received! received)
+    (define/public (set-received! received)
       (unless (eq? (hash-ref info-for-exn 'received) received)
         (set! info-for-exn (hash-set info-for-exn 'received received))))
 
@@ -430,29 +438,41 @@
 
     (define/public (handle-rst_stream errorcode)
       (send-exn-to-user
-       (build-exn "stream closed by server"
-                  (hash-set* info-for-exn 'code 'RST_STREAM)))
+       (build-exn "stream closed by server (RST_STREAM)"
+                  (hash-set* info-for-exn
+                             'code 'RST_STREAM
+                             'http2-error (decode-error-code errorcode)
+                             'http2-errorcode errorcode)))
       (set-s2-state! 'done))
 
     (define/public (handle-goaway last-streamid errorcode debug)
       ;; If this streamid > last-streamid, then server has not processed
       ;; this request, and it's okay to auto-retry on new connection.
       (when (> streamid last-streamid)
-        (set-received! 'no))
+        (set-received! 'no)
+        (send-exn-to-user
+         (build-exn "connection closed by server (GOAWAY)"
+                    (hash-set* info-for-exn
+                               'code 'GOAWAY
+                               'http2-error (decode-error-code errorcode)
+                               'http2-errorcode errorcode)))
+        (set-s2-state! 'done)))
+
+    (define/public (handle-eof)
       (send-exn-to-user
-       (build-exn "connection closed by server"
-                  (hash-set* info-for-exn 'code 'GOAWAY)))
+       (build-exn "connection closed by server (EOF)"
+                  (hash-set* info-for-exn 'code 'server-EOF)))
       (set-s2-state! 'done))
 
-    (define/public (signal-error errorcode msg e)
-      (send-exn-to-user (or e (make-stream-exn errorcode msg)))
+    (define/public (signal-ua-error errorcode msg)
+      (send-exn-to-user
+       (build-exn (or msg "stream closed by user agent")
+                  (hash-set* info-for-exn
+                             'code 'user-agent-stream-error
+                             'http2-error (decode-error-code errorcode)
+                             'http2-errorcode errorcode)))
       (set-s2-state! 'done)
       (raise 'stream-error))
-
-    (define/private (make-stream-exn errorcode msg)
-      (define code (or (decode-error-code errorcode) 'unknown-stream-error))
-      (build-exn (or msg "stream closed by user agent")
-                 (hash-set* info-for-exn 'code code 'http2-errorcode errorcode)))
 
     ;; ----------------------------------------
     ;; Send request

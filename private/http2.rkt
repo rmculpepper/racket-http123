@@ -30,19 +30,6 @@
           'max-frame-size (expt 2 14)
           'max-header-list-size +inf.0))
 
-;; FIXME: temporary
-(define (connect host port)
-  (define-values (in out) (ssl-connect host port #:alpn '(#"h2")))
-  (unless (equal? (ssl-get-alpn-selected in) #"h2")
-    (error 'connect "failed to negotiate h2"))
-  (new http2-actual-connection% (in in) (out out)))
-
-#;
-(begin (define hs '((#"user-agent" #"Racket (http123)") (#"accept-encoding" #"gzip")))
-       (define req (request 'GET (string->url "https://www.google.com/") hs #f))
-       (define c (connect "www.google.com" 443))
-       (define r (send c open-request req)))
-
 ;; ============================================================
 
 (define http2-actual-connection%
@@ -73,42 +60,34 @@
 
     (define/public (get-sending-dt) sending-dt)
 
-    ;; closed? : (U #f 'by-goaway 'by-error 'user-abandoned 'EOF)
-    ;; This state is used by the manager and by user threads.
-    ;; The reader keeps reading until EOF.
-    (define closed? #f)
+    ;; is-closed? : (U #f 'by-goaway 'by-error 'user-abandoned 'EOF)
+    ;; Value is #f if allowed to start new streams; symbol if not allowed.
+    (define is-closed? #f)
+    (define/public (open?) (not is-closed?))
+    (define/public (closed?) (not (open?)))
 
     (define/private (set-closed! reason)
-      (unless closed?
-        (set! closed? reason)
-        (abandon-port out)))
-
-    (define/public (abandon) (set-closed! 'user-abandoned))
-
-    (define/public (open?) (not closed?))
+      (unless is-closed? (set! is-closed? reason)))
 
     ;; ----------------------------------------
 
     (define/public (queue-frame fr)
-      (log-http2-debug "--> ~a~a" (if closed? "DROPPING " "")
+      (log-http2-debug "--> ~a"
                        (parameterize ((error-print-width 60))
                          (format "~e" fr)))
       (adjust-out-flow-window (- (frame-fc-length fr)))
-      (unless closed? (write-frame out fr)))
+      (write-frame out fr))
     (define/public (queue-frames frs)
       (for ([fr (in-list frs)]) (queue-frame fr)))
     (define/public (flush-frames) (flush-output out))
 
-    (define/public (connection-error errorcode [comment ""] #:debug [debug #""])
+    (define/public (connection-error errorcode [comment #f] #:debug [debug #""])
       (log-http2-debug "connection-error ~s, ~s" errorcode comment)
       (queue-frame (frame type:GOAWAY 0 0 (fp:goaway last-server-streamid errorcode debug)))
       (flush-frames)
-      ;; FIXME: notify all streams
       (set-closed! 'by-error)
-      (when #t
-        (let ([fake-exn (exn:fail (format "connection error: ~s, ~s" errorcode comment)
-                                  (current-continuation-marks))])
-          ((error-display-handler) (exn-message fake-exn) fake-exn)))
+      (for ([(streamid stream) (in-hash stream-table)])
+        (send stream handle-ua-connection-error errorcode comment))
       (raise 'connection-error))
 
     ;; ----------------------------------------
@@ -123,7 +102,7 @@
 
     (define/public (get-stream streamid [fail-ok? #f])
       (cond [(zero? streamid)
-             (connection-error error:PROTOCOL_ERROR "get streamid = 0")]
+             (connection-error error:PROTOCOL_ERROR "reference to stream 0")]
             [(hash-ref stream-table streamid #f)
              => values]
             [(and (streamid-from-server? streamid)
@@ -137,7 +116,7 @@
       (hash-remove! stream-table streamid))
 
     (define/public (new-client-stream req send-req?)
-      (make-stream (+ last-client-streamid 2) req send-req?))
+      (and (not is-closed?) (make-stream (+ last-client-streamid 2) req send-req?)))
 
     (define/public (make-stream streamid req send-req?)
       (define stream
@@ -158,13 +137,13 @@
         [(? frame? fr)
          (handle-frame fr)
          (after-handle-frame)]
-        ['EOF (unless closed?
-                ;; FIXME: update all streams like goaway?
-                (set-closed! 'EOF))]
-        ;; Request for new stream
-        [(? procedure?) (v)]
-        ;; FIXME: read-exn, etc?
-        ))
+        ['EOF
+         (set-closed! 'EOF)
+         (close-input-port in)
+         (close-output-port out)
+         (for ([(streamid stream) (in-hash stream-table)])
+           (send stream handle-eof))]
+        [(? procedure?) (v)]))
 
     (define in-continue-frames null) ;; (Listof Frame), reversed
 
@@ -178,7 +157,7 @@
                        (set! in-continue-frames null)
                        (handle-multipart-frames frs)]
                       [else (set! in-continue-frames (cons fr in-continue-frames))])]
-               [_ (connection-error error:PROTOCOL_ERROR "expected continuation")])]
+               [_ (connection-error error:PROTOCOL_ERROR "expected continuation frame")])]
             [else (handle-frame* fr)]))
 
     (define/private (handle-multipart-frames frs)
@@ -192,12 +171,8 @@
                         ((error-display-handler) (exn-message e) e)
                         (eprintf "headerb = ~v\n" headerb)
                         (eprintf "********************\n")
-                        (connection-error
-                         error:COMPRESSION_ERROR
-                         #:streamid streamid
-                         #:raise (merge-exn e "error decoding headers"
-                                            (hasheq 'code 'malformed-headers
-                                                    'received 'yes))))
+                        (send (get-stream streamid) set-received! 'yes)
+                        (connection-error error:COMPRESSION_ERROR "error decoding header"))
           (decode-header headerb reading-dt)))
       (match (car frs)
         [(frame (== type:HEADERS) flags streamid
@@ -216,9 +191,9 @@
         [(frame type flags streamid payload)
          (define (stream) (get-stream streamid))
          (define (check-stream-zero)
-           (unless (= streamid 0) (connection-error error:PROTOCOL_ERROR "want stream = 0")))
+           (unless (= streamid 0) (connection-error error:PROTOCOL_ERROR "requires stream 0")))
          (define (check-stream-nonzero)
-           (when (= streamid 0) (connection-error error:PROTOCOL_ERROR "want stream != 0")))
+           (when (= streamid 0) (connection-error error:PROTOCOL_ERROR "reference to stream 0")))
          (match type
            [(== type:DATA)
             (check-stream-nonzero)
@@ -261,8 +236,12 @@
            [(== type:GOAWAY)
             (check-stream-zero)
             (match-define (fp:goaway last-streamid errorcode debug) payload)
-            ;; last-streamid is the last streamid that we initiated that the server acks
-            (for ([(streamid stream) (in-hash stream-table)])
+            ;; If last-streamid=2^31-1 and errorcode = NO_ERROR, it is probably
+            ;; a timeout warning, and it will (proabably) be followed by another
+            ;; GOAWAY with a more specific last-streamid.
+            ;; Note: GOAWAY does not close existing streams! (<= last-streamid)
+            (for ([(streamid stream) (in-hash stream-table)]
+                  #:when (> streamid last-streamid))
               (send stream handle-goaway last-streamid errorcode debug))
             (set-closed! 'by-goaway)]
            [(== type:WINDOW_UPDATE)
@@ -297,8 +276,6 @@
 
     (define/private (after-handle-frame)
       (define target-in-flow-window (get-target-in-flow-window))
-      (log-http2-debug "after-handle-frame: in-fw = ~s, target = ~s"
-                       in-flow-window target-in-flow-window)
       (when (< in-flow-window target-in-flow-window)
         (define delta (- target-in-flow-window in-flow-window))
         (define max-frame-size (hash-ref my-config 'max-frame-size))
@@ -358,7 +335,7 @@
         (wrap-evt (if #f
                       (guard-evt
                        (lambda ()
-                         (alarm-evt (+ (current-inexact-milliseconds) #e1e4))))
+                         (alarm-evt (+ (current-inexact-milliseconds) #e5e3))))
                       never-evt)
                   (lambda (ignored) (log-http2-debug "manager is bored!"))))
       ;; ----
@@ -405,28 +382,39 @@
 
     (define/public (open-request req)
       (define streambxe (make-box-evt))
-      (thread-send manager-thread
-                   (lambda ()
-                     (with-handler (lambda (e)
-                                     (box-evt-set! streambxe (lambda () (raise e)))
-                                     (raise e))
-                       (define stream (new-client-stream req #t))
-                       (box-evt-set! streambxe (lambda () stream))))
-                   (lambda () #f))
-      (define stream ((sync streambxe)))
-      ;; Stream automatically sends request header.
-      (define-values (pump-data-out resp-bxe)
-        (send stream get-user-communication))
-      ;; User thread writes request content.
-      ;; FIXME: optimize, send short data bytes on stream initialization
-      (pump-data-out)
-      ;; Get response header. (Note: may receive raised-exception instead!)
-      resp-bxe)
+      (define (do-open-request)
+        (with-handler (lambda (e)
+                        (box-evt-set! streambxe (lambda () (raise e)))
+                        (raise e))
+          (define stream (new-client-stream req #t))
+          (box-evt-set! streambxe (lambda () stream))))
+      (thread-send manager-thread do-open-request
+                   (lambda () (box-evt-set! streambxe (lambda () #f))))
+      (define get-stream (sync streambxe))
+      ;;(define stream ((sync streambxe)))
+      (define stream (get-stream))
+      (cond [stream
+             (define-values (pump-data-out resp-bxe)
+               (send stream get-user-communication))
+             (pump-data-out)
+             resp-bxe]
+            [else #f]))
 
     (define/public (register-user-abort-request stream)
-      (thread-send manager-thread
-                   (lambda () (send stream handle-user-abort))
-                   void))
+      (define (do-register-abort) (send stream handle-user-abort))
+      (thread-send manager-thread do-register-abort void))
+
+    (define/public (abandon)
+      (define (do-abandon)
+        (define payload (fp:goaway last-server-streamid error:NO_ERROR #""))
+        (queue-frame (frame type:GOAWAY 0 0 payload))
+        (flush-frames)
+        ;; Don't close/abandon output port, because may need to write eg
+        ;; WINDOW_UPDATE frames to finish receiving from existing streams.
+        (void))
+      (unless is-closed?
+        (set-closed! 'user-abandoned)
+        (thread-send manager-thread do-abandon void)))
 
     ;; ========================================
 
