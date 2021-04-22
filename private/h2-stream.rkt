@@ -120,7 +120,7 @@
     ;; Stage 4. This object sends trailer to user.
     (define trailerbxe (make-box-evt))
 
-    (define/private (send-exn-to-user e)
+    (define/public (send-exn-to-user e)
       (box-evt-set! resp-bxe (lambda () (raise e)))
       (box-evt-set! trailerbxe (lambda () (raise e)))
       (raise-user-in-exn e))
@@ -298,7 +298,7 @@
 
     (define/public (handle-ua-connection-error errorcode comment)
       (define msg (format "user agent signaled connection error\n  reason: ~a" comment))
-      (send pstate signal-ua-error errorcode msg))
+      (signal-ua-error errorcode msg))
 
     (define/public (handle-eof)
       (check-state 'rst_stream) ;; pretend
