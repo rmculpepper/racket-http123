@@ -95,7 +95,7 @@
 (define default-indexing-policy
   #hash((default                . no)
         (#":authority"          . yes)
-        (#":path"               . no)
+        (#":path"               . no)  ;; maybe yes for APIs
         (#"accept-charset"      . yes)
         (#"accept-language"     . yes)
         (#"age"                 . no)

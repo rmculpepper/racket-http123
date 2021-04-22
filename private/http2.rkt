@@ -14,6 +14,18 @@
          "h2-stream.rkt")
 (provide (all-defined-out))
 
+;; FIXME/TODO:
+;; - add way(s) to shut down connection, including ports
+;;   - abandon waits for server to send EOF
+;;   - user could use custodian
+;; - various limit options
+;; - implement HPACK policies, limits
+;; - make flow-control (eg, init in-flow window) configurable
+;; - HPACK:
+;;   - be smarter about indexing (eg, don't index huge value that just
+;;     evicts everything in the table)
+;;   - reorder fields to enable indexing?
+
 ;; References:
 ;; - https://tools.ietf.org/html/rfc7540
 
@@ -320,7 +332,6 @@
     ;; - just reads frames from input, sends to manager
 
     ;; FIXME: make kill-safe
-    ;; FIXME: periodically prune closed streams from table
 
     (define/private (manager)
       (define reader-evt
@@ -390,9 +401,7 @@
           (box-evt-set! streambxe (lambda () stream))))
       (thread-send manager-thread do-open-request
                    (lambda () (box-evt-set! streambxe (lambda () #f))))
-      (define get-stream (sync streambxe))
-      ;;(define stream ((sync streambxe)))
-      (define stream (get-stream))
+      (define stream ((sync streambxe)))
       (cond [stream
              (define-values (pump-data-out resp-bxe)
                (send stream get-user-communication))
