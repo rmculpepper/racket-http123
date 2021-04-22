@@ -211,7 +211,7 @@
 (define (read-intrep-k br)
   (let loop ([acc 0] [power 0])
     (define b (b-read-byte br))
-    (define acc* (+ acc (arithmetic-shift (bitwise-bit-field b 0 6) power)))
+    (define acc* (+ acc (arithmetic-shift (bitwise-bit-field b 0 7) power)))
     (if (bitwise-bit-set? b 7) (loop acc* (+ power 7)) acc*)))
 
 (define (write-intrep out prefix high-b n)
