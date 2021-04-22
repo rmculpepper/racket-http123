@@ -51,8 +51,8 @@
     ;; ============================================================
     ;; Stream Layer 1
 
-    ;; This layer cares about the state machine described in Section 5. It does
-    ;; not deal with the structure of HTTP requests.
+    ;; This layer cares about frames, the state machine described in Section 5,
+    ;; and flow control. It does not deal with the structure of HTTP requests.
 
     (define/private (connection-error errorcode [debug #""])
       (send conn connection-error errorcode debug))
@@ -73,9 +73,11 @@
     (define/public (adjust-in-flow-window delta)
       (set! in-flow-window (+ in-flow-window delta)))
 
-    ;; Increased by handle-window_update, decreased by queue-frame (DATA case).
-    (define/private (adjust-out-flow-window delta)
+    ;; Increased by handle-window_update and SETTINGS frame, decreased by
+    ;; queue-frame (DATA case).
+    (define/public (adjust-out-flow-window delta)
       (set! out-flow-window (+ out-flow-window delta))
+      ;; SETTINGS may make this go negative; not an error, see 6.9.2.
       (unless (< out-flow-window FLOW-WINDOW-BOUND)
         (stream-error error:FLOW_CONTROL_ERROR)))
 

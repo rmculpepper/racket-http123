@@ -37,7 +37,7 @@
 
 (define INIT-TARGET-IN-FLOW-WINDOW (expt 2 20)) ;; FIXME: config?
 
-(define init-config
+(define standard-init-config
   (hasheq 'header-table-size 4096
           'enable-push 1
           'max-concurrent-streams +inf.0
@@ -45,17 +45,22 @@
           'max-frame-size (expt 2 14)
           'max-header-list-size +inf.0))
 
+(define init-config
+  (hash-set* standard-init-config
+             'enable-push 0))
+
 ;; ============================================================
 
 (define http2-actual-connection%
   (class* object% ()
     (init-field in out parent)
+    (init [my-new-config init-config])
     (super-new)
 
     (define br (make-binary-reader in))
 
-    (define config init-config) ;; Config of server
-    (define my-config init-config) ;; Config of client, acked by server
+    (define config standard-init-config) ;; Config of server
+    (define my-config standard-init-config) ;; Config of client, acked by server
     (define my-configs/awaiting-ack null) ;; (Listof Config), oldest-first
 
     (define/public (get-config) config)
@@ -275,9 +280,11 @@
              (unless (memv value '(0 1))
                (connection-error error:PROTOCOL_ERROR "bad enable_push value"))]
             [(initial-window-size)
-             ;; FIXME: changes current stream windows???
              (unless (< value FLOW-WINDOW-BOUND)
-               (connection-error error:FLOW_CONTROL_ERROR "window too large"))])
+               (connection-error error:FLOW_CONTROL_ERROR "window too large"))
+             (define delta (- value (hash-ref h 'initial-window-size)))
+             (for ([(streamid stream) (in-hash stream-table)])
+               (send stream adjust-out-flow-window delta))])
           (hash-set h key value)))
       (set! config new-config)
       (queue-frame (frame type:SETTINGS flag:ACK 0 (fp:settings null))))
@@ -426,13 +433,16 @@
 
     ;; ========================================
 
-    (define/private (send-handshake)
+    (define/private (send-handshake my-new-config)
       (write-bytes http2-client-preface out)
-      (define my-new-config my-config) ;; FIXME?
-      (queue-frame (frame type:SETTINGS 0 0 (fp:settings null)))
+      (define settings
+        (for/list ([(key val) (in-hash my-new-config)]
+                   #:when (and (hash-has-key? standard-init-config key)
+                               (not (equal? (hash-ref standard-init-config key) val))))
+          (setting (encode-setting-key key) val)))
+      (queue-frame (frame type:SETTINGS 0 0 (fp:settings settings)))
       (set! my-configs/awaiting-ack (list my-new-config))
       (flush-frames))
 
-    (send-handshake)
-
+    (send-handshake my-new-config)
     ))
