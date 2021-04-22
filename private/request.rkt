@@ -24,7 +24,11 @@
             (unless (or (eq? #f data) (bytes? data) (procedure? data))
               (raise-argument-error 'request "(or/c #f bytes? procedure?)" data))
             (values method u hs data))
-  #:transparent)
+  #:transparent
+  #:property prop:about
+  (lambda (self)
+    (match-define (request method (url scheme _ host port _ _ _ _) _ _) self)
+    (format "~a ~a://~a~a~a/..." method scheme host (if port ":" "") (or port ""))))
 
 ;; request:can-replay? : Request -> Boolean
 ;; Can the request be replayed in a different actual connection?  Only care

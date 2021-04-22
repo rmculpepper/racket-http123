@@ -103,9 +103,13 @@
   (define (detail key)
     (cond [(hash-has-key? info key) (format "\n  ~a: ~e" key (hash-ref info key))]
           [else ""]))
+  (define (request-detail req)
+    (format "\n  request: ~a" ((about-ref req) req)))
   (string-append
    (detail 'code)
-   (detail 'request)
+   (detail 'http2-error)
+   ;;(detail 'request)
+   (cond [(hash-ref info 'request #f) => request-detail] [else ""])
    (detail 'received)
    (detail 'version)
    (cond [(hash-ref info 'wrapped-exn #f)
@@ -113,6 +117,9 @@
                              (format "\n  wrapped error: ~e" (exn-message e))
                              ""))]
          [else ""])))
+
+(define-values (prop:about aboutable? about-ref)
+  (make-struct-type-property 'about))
 
 ;; ============================================================
 ;; Exceptions
