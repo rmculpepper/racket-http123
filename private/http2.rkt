@@ -295,7 +295,7 @@
         (define delta (- target-in-flow-window in-flow-window))
         (define max-frame-size (hash-ref my-config 'max-frame-size))
         ;; Only increase window when the difference w/ target is significant.
-        (when (or (< (* 2 max-frame-size) delta)
+        (when (or (>= delta (* 2 max-frame-size))
                   (< (* 2 in-flow-window) target-in-flow-window))
           (queue-frame (frame type:WINDOW_UPDATE 0 0 (fp:window_update delta)))
           (adjust-in-flow-window delta))))

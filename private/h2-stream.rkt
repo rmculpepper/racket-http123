@@ -15,6 +15,8 @@
 (define INIT-FLOW-WINDOW (sub1 (expt 2 16)))
 (define FLOW-WINDOW-BOUND (expt 2 31))
 
+(define SIGNIFICANT-DELTA (expt 2 12))
+
 (define KEEP-AFTER-CLOSE-MS (* 2 1000.0)) ;; keep closed stream for 2s
 
 (define http2-stream%
@@ -26,6 +28,7 @@
     ;; Stream-local limit on flow-controlled {sends, receives}.
     (define out-flow-window INIT-FLOW-WINDOW)
     (define in-flow-window INIT-FLOW-WINDOW)
+    (define in-flow-buffer-size INIT-FLOW-WINDOW)
 
     (field [state 'idle]) ;; StreamState, see below
     (field [s2 (new stream-level2% (s1 this) (streamid streamid) (conn conn)
@@ -42,19 +45,20 @@
       (send s2 get-user-communication))
     (define/public (get-work-evt)
       (send s2 get-work-evt))
+    (define/public (set-received! received)
+      (send s2 set-received! received))
 
     ;; ============================================================
     ;; Stream Layer 1
 
     ;; This layer cares about the state machine described in Section 5. It does
     ;; not deal with the structure of HTTP requests.
-    ;; - flow windows
 
     (define/private (connection-error errorcode [debug #""])
       (send conn connection-error errorcode debug))
 
     (define/private (stream-error errorcode #:message [msg #f])
-      (log-http2-debug "stream error, code = ~s, message = ~e" errorcode msg)
+      (log-http2-debug "stream error: code = ~s, message = ~e" errorcode msg)
       (queue-frame (frame type:RST_STREAM 0 streamid (fp:rst_stream errorcode)))
       (send s2 signal-ua-error errorcode msg))
 
@@ -67,7 +71,6 @@
     ;; Increased by queue-frame (WINDOW_UPDATE case), decreased by
     ;; handle-data-payload.
     (define/public (adjust-in-flow-window delta)
-      ;; FIXME: check bounds errors
       (set! in-flow-window (+ in-flow-window delta)))
 
     ;; Increased by handle-window_update, decreased by queue-frame (DATA case).
@@ -75,6 +78,17 @@
       (set! out-flow-window (+ out-flow-window delta))
       (unless (< out-flow-window FLOW-WINDOW-BOUND)
         (stream-error error:FLOW_CONTROL_ERROR)))
+
+    ;; Called from s2 in response to user reading from buffer.
+    (define/public (update-in-flow-window buffered)
+      ;; target-ifw  : space avail in buffer = max(0, bufsize - buffered)
+      (define target-in-flow-window (max 0 (- in-flow-buffer-size buffered)))
+      (when (< in-flow-window target-in-flow-window)
+        (define delta (- target-in-flow-window in-flow-window))
+        ;; Only increase window when the difference w/ target is significant.
+        (when (or (>= delta SIGNIFICANT-DELTA)
+                  (< (* 2 in-flow-window) target-in-flow-window))
+          (queue-frame (frame type:WINDOW_UPDATE 0 streamid (fp:window_update delta))))))
 
     ;; ----------------------------------------
     ;; Finite state machine
@@ -359,7 +373,7 @@
     (define/public (setup:reading-response-data)
       (set-work-evt!
        (handle-evt (guard-evt (lambda () user-in-last-progress-evt))
-                   (lambda (ignored) (update-target-in-flow-window)))))
+                   (lambda (ignored) (update-in-flow-window)))))
 
     (define/public (teardown:reading-response-data)
       (set-work-evt! never-evt))
@@ -610,23 +624,17 @@
     ;; Updating flow window when user consumes data
 
     ;; called in response to progress/closure in `user-in` port
-    (define/public (update-target-in-flow-window)
+    (define/public (update-in-flow-window)
       (cond [(port-closed? user-in) ;; don't want more data
              (set! user-in-last-progress-evt never-evt)
              (queue-frame (frame type:RST_STREAM 0 streamid (fp:rst_stream error:CANCEL)))
              (check-s2-state 'end)]
             [else ;; want increment more data
-             (define delta (update-user-in-mark/get-delta))
-             (queue-frame (frame type:WINDOW_UPDATE 0 streamid (fp:window_update delta)))]))
-
-    (define/private (update-user-in-mark/get-delta)
-      ;; FIXME: get file-position and port-progress-evt atomically ??
-      (define position (file-position user-in))
-      (define progress-evt (port-progress-evt user-in))
-      (define delta (- position user-in-last-position))
-      (set! user-in-last-position position)
-      (set! user-in-last-progress-evt progress-evt)
-      delta)
+             (set! user-in-last-progress-evt (port-progress-evt user-in))
+             ;; buffered : space used in pipe's buffer
+             (define buffered (- (file-position user-out) (file-position user-in)))
+             (log-http2-debug "user read from content buffer: buffered = ~s" buffered)
+             (send s1 update-in-flow-window buffered)]))
 
     ;; ============================================================
     ;; Finish initialization
