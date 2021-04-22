@@ -18,13 +18,16 @@
 ;; - add way(s) to shut down connection, including ports
 ;;   - abandon waits for server to send EOF
 ;;   - user could use custodian
-;; - various limit options
 ;; - implement HPACK policies, limits
-;; - make flow-control (eg, init in-flow window) configurable
 ;; - HPACK:
 ;;   - be smarter about indexing (eg, don't index huge value that just
 ;;     evicts everything in the table)
 ;;   - reorder fields to enable indexing?
+;; - configuration
+;;   - various limits
+;;   - flow-control (eg, init in-flow window)
+;;   - timeouts
+
 
 ;; References:
 ;; - https://tools.ietf.org/html/rfc7540
