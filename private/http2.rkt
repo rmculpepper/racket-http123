@@ -308,6 +308,8 @@
 
     ;; The out-flow window is determined by the server.
 
+    (define/public (get-out-flow-window) out-flow-window)
+
     ;; The in-flow window targets a constant. See after-handle-frame.
     (define/private (get-target-in-flow-window) INIT-TARGET-IN-FLOW-WINDOW)
 
