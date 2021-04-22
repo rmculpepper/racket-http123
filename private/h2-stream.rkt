@@ -88,10 +88,10 @@
       (unless (eq? (hash-ref info-for-exn 'received) received)
         (set! info-for-exn (hash-set info-for-exn 'received received))))
 
-    (define/private (connection-error errorcode [debug #""])
+    (define/public (connection-error errorcode [debug #""])
       (send conn connection-error errorcode debug))
 
-    (define/private (stream-error errorcode #:message [msg #f])
+    (define/public (stream-error errorcode [msg #f])
       (log-http2-debug "stream error: code = ~s, message = ~e" errorcode msg)
       (queue-frame (frame type:RST_STREAM 0 streamid (fp:rst_stream errorcode)))
       (signal-ua-error errorcode msg))
@@ -208,7 +208,7 @@
       (define (my-error)
         (define fmt "internal error: bad send state transition\n  state: ~e\n  transition: ~e")
         (define msg (format fmt state transition))
-        (stream-error error:INTERNAL_ERROR #:message msg))
+        (stream-error error:INTERNAL_ERROR msg))
       (case state
         [(idle)
          (case transition
@@ -370,7 +370,6 @@
             (frame type:HEADERS flags streamid (fp:headers 0 0 0 headerbf))
             (frame type:CONTINUATION flags streamid (fp:continuation headerbf)))))
 
-    ;; FIXME: pseudo-header fields MUST appear first, contiguous
     ;; FIXME: 8.1.2.2 forbids Connection header, others
     (define/private (make-pseudo-header method u)
       (list (list #":method" (symbol->bytes method))
@@ -463,10 +462,8 @@
       (bad-tx 'PUSH_PROMISE))
 
     (define/private (bad-tx tx)
-      ;; FIXME
-      (error 'protocol-state-transition
-             "unexpected ~a frame from server\n  protocol state: ~a"
-             tx (about)))
+      (send stream stream-error error:PROTOCOL_ERROR
+            (format "unexpected ~a frame from server\n  protocol state: ~a" tx (about))))
 
     ;; Default implementations, usually not overridden:
 
