@@ -114,7 +114,8 @@
    (detail 'version)
    (cond [(hash-ref info 'wrapped-exn #f)
           => (lambda (e) (if (exn? e)
-                             (format "\n  wrapped error: ~e" (exn-message e))
+                             (format "\n  wrapped error: ~e"
+                                     (regexp-replace #rx"\n  .*$" (exn-message e) "..."))
                              ""))]
          [else ""])))
 
@@ -144,12 +145,7 @@
   (let* ([info (merge-info base-info info)]
          [info (if wrapped-exn (hash-set info 'wrapped-exn wrapped-exn) info)])
     (let/ec k
-      (raise (exn:fail:http123
-              (format "~a: ~a"
-                      (http123-who (hash-ref info 'who #f))
-                      (apply format fmt args))
-              (continuation-marks k)
-              info)))))
+      (raise (build-exn (apply format fmt args) info (continuation-marks k))))))
 
 (define (h1-error #:info [info #hasheq()]
                   #:base-info [base-info (h-error-info)]

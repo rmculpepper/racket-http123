@@ -58,9 +58,10 @@
     ;; queue-frame (DATA case).
     (define/public (adjust-out-flow-window delta)
       (set! out-flow-window (+ out-flow-window delta))
-      ;; SETTINGS may make this go negative; not an error, see 6.9.2.
-      (unless (< out-flow-window FLOW-WINDOW-BOUND)
-        (stream-error error:FLOW_CONTROL_ERROR)))
+      (when (positive? delta)
+        ;; SETTINGS may make this go negative; not an error, see 6.9.2.
+        (unless (< out-flow-window FLOW-WINDOW-BOUND)
+          (stream-error error:FLOW_CONTROL_ERROR))))
 
     ;; Called from pstate in response to user reading from buffer.
     (define/public (update-in-flow-window buffered)
@@ -94,13 +95,15 @@
     (define/public (stream-error errorcode [msg #f])
       (log-http2-debug "stream error: code = ~s, message = ~e" errorcode msg)
       (queue-frame (frame type:RST_STREAM 0 streamid (fp:rst_stream errorcode)))
-      (signal-ua-error errorcode msg))
+      (signal-ua-error #f errorcode msg))
 
-    (define/public (signal-ua-error errorcode msg)
+    (define/public (signal-ua-error conn-error? errorcode msg)
       (send-exn-to-user
-       (build-exn (or msg "stream closed by user agent")
+       (build-exn (cond [msg msg]
+                        [conn-error? "connection error signaled by user agent"]
+                        [else "stream error signaled by user agent"])
                   (hash-set* info-for-exn
-                             'code 'user-agent-stream-error
+                             'code (if conn-error? 'ua-connection-error 'ua-stream-error)
                              'http2-error (decode-error-code errorcode)
                              'http2-errorcode errorcode)))
       (change-pstate! (make-done-pstate))
@@ -298,7 +301,7 @@
 
     (define/public (handle-ua-connection-error errorcode comment)
       (define msg (format "user agent signaled connection error\n  reason: ~a" comment))
-      (signal-ua-error errorcode msg))
+      (signal-ua-error #t errorcode msg))
 
     (define/public (handle-eof)
       (check-state 'rst_stream) ;; pretend

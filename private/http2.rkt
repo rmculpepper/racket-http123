@@ -177,7 +177,7 @@
                        (set! in-continue-frames null)
                        (handle-multipart-frames frs)]
                       [else (set! in-continue-frames (cons fr in-continue-frames))])]
-               [_ (connection-error error:PROTOCOL_ERROR "expected continuation frame")])]
+               [_ (connection-error error:PROTOCOL_ERROR "expected CONTINUATION frame")])]
             [else (handle-frame* fr)]))
 
     (define/private (handle-multipart-frames frs)
@@ -232,9 +232,9 @@
             (match-define (fp:settings settings) payload)
             (cond [(flags-has? flags flag:ACK)
                    (unless (null? settings)
-                     (connection-error error:FRAME_SIZE_ERROR "non-empty settings ack"))
+                     (connection-error error:FRAME_SIZE_ERROR "non-empty SETTINGS ack"))
                    (unless (pair? my-configs/awaiting-ack)
-                     (connection-error error:PROTOCOL_ERROR "unexpected settings ack"))
+                     (connection-error error:PROTOCOL_ERROR "unexpected SETTINGS ack"))
                    (set! my-config (car my-configs/awaiting-ack))
                    (set! my-configs/awaiting-ack (cdr my-configs/awaiting-ack))]
                   [else (handle-settings settings)])]
@@ -266,7 +266,7 @@
             (cond [(zero? streamid) (handle-connection-window_update flags increment)]
                   [else (send (stream) handle-window_update flags increment)])]
            [(== type:CONTINUATION)
-            (connection-error error:PROTOCOL_ERROR "unexpected continuation")]
+            (connection-error error:PROTOCOL_ERROR "unexpected CONTINUATION frame")]
            [_
             ;; Ignore unknown frames, per ??.
             (void)])]))
@@ -316,10 +316,11 @@
     ;; Out-flow window is decreased by queue-frame (on DATA send) and
     ;; increased by handle-connection-window_update.
     (define/private (adjust-out-flow-window delta)
-      ;; FIXME: detect negative, detect over bound
+      ;; FIXME: detect negative
       (set! out-flow-window (+ out-flow-window delta))
-      (unless (< out-flow-window FLOW-WINDOW-BOUND)
-        (connection-error error:FLOW_CONTROL_ERROR "window too large")))
+      (when (positive? delta)   ;; avoids loop w/ queue-frame
+        (unless (< out-flow-window FLOW-WINDOW-BOUND)
+          (connection-error error:FLOW_CONTROL_ERROR "window too large"))))
 
     ;; In-flow window is decreased by handle-frame* (DATA case),
     ;; increased by after-handle-frame.

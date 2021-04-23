@@ -177,7 +177,7 @@
      (define debug (rest-of-payload))
      (fp:goaway last-streamid errorcode debug)]
     [(== type:WINDOW_UPDATE)
-     (define increment (bitwise-bit-field (b-read-be-uint br 4) 0 30))
+     (define increment (bitwise-bit-field (b-read-be-uint br 4) 0 31))
      (fp:window_update increment)]
     [(== type:CONTINUATION)
      (define headerbf (read-headerbf br))
