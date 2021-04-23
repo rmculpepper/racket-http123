@@ -30,7 +30,6 @@
 ;;   - various limits
 ;;   - flow-control (eg, init in-flow window)
 ;;   - timeouts
-;; - handle Informational headers before response header (see 8.1)
 ;; - handle CONNECT ?
 
 ;; References:
