@@ -37,29 +37,32 @@
   (define server (make-server actions server-in out-to-client))
   (new http2-actual-connection% (in client-in) (out out-to-server) (parent #f)))
 
-(define (test1 expects actions)
-  (define ac (setup actions))
-  (define r1 (send ac open-request (request 'GET "https://localhost/something" null #f)))
-  ((sync r1)))
+(begin-for-syntax
+  (define ((make-test-case-wrapper proc-id) stx)
+    (syntax-case stx ()
+      [(_ arg ...)
+       #`(test-case (source-location->string (quote-syntax #,stx))
+           (#,proc-id arg ...))])))
+
+;; ============================================================
+;; Error tests
+
+(define (run-expects expects e)
+  (for ([expect expects])
+    (match expect
+      ['raise (raise e)]
+      [(? regexp?) (check regexp-match? expect (exn-message e))]
+      [(? hash?) (for ([(expkey expval) (in-hash expect)])
+                   (check-equal? (hash-ref (exn:fail:http123-info e) expkey #f)
+                                 expval))])))
 
 (define (test1e* expects actions)
   (define ac (setup actions))
   (define r1 (send ac open-request (request 'GET "https://localhost/something" null #f)))
-  (check-exn (lambda (e)
-               (for ([expect expects])
-                 (match expect
-                   ['raise (raise e)]
-                   [(? regexp?) (check regexp-match? expect (exn-message e))]
-                   [(? hash?) (for ([(expkey expval) (in-hash expect)])
-                                (check-equal? (hash-ref (exn:fail:http123-info e) expkey #f)
-                                              expval))])))
+  (check-exn (lambda (e) (run-expects expects e))
              (lambda () ((sync r1)))))
 
-(define-syntax (test1e stx)
-  (syntax-case stx ()
-    [(_ expects actions)
-     #`(test-case (source-location->string (quote-syntax #,stx))
-         (test1e* expects actions))]))
+(define-syntax test1e (make-test-case-wrapper #'test1e*))
 
 (define conn-err (hasheq 'code 'ua-connection-error 'version 'http/2))
 (define conn-proto-err (hash-set conn-err 'http2-error 'PROTOCOL_ERROR))
@@ -172,3 +175,29 @@
 
 ;; reading-response-pstate%
 ;; FIXME
+
+;; ============================================================
+;; Error tests for errors sending data
+
+(define (test1de* expects actions #:data data)
+  (define ac (setup actions))
+  (define r (send ac open-request (request 'GET "https://localhost/something" null data)))
+  (check-exn (lambda (e) (run-expects expects e))
+             (lambda () ((sync r)))))
+(define-syntax test1de (make-test-case-wrapper #'test1de*))
+
+(test1de (list #rx"request canceled by exception from data procedure"
+               stream-err (hasheq 'http2-error 'CANCEL 'received 'unknown))
+         (list)
+         #:data (lambda (put)
+                  (put #"hello")
+                  (error 'nevermind)))
+
+;; ============================================================
+
+(define (test1r* hh actions #:data [data #f])
+  (define ac (setup actions))
+  (define r ((sync (send ac open-request (request 'GET "https://localhost/" null data)))))
+  r)
+
+(define-syntax test1r (make-test-case-wrapper #'test1r*))

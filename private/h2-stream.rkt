@@ -92,17 +92,19 @@
     (define/public (connection-error errorcode [debug #""])
       (send conn connection-error errorcode debug))
 
-    (define/public (stream-error errorcode [msg #f])
+    (define/public (stream-error errorcode [msg #f] [wrapped-exn #f])
       (log-http2-debug "stream error: code = ~s, message = ~e" errorcode msg)
       (queue-frame (frame type:RST_STREAM 0 streamid (fp:rst_stream errorcode)))
-      (signal-ua-error #f errorcode msg))
+      (signal-ua-error #f errorcode msg wrapped-exn))
 
-    (define/public (signal-ua-error conn-error? errorcode msg)
+    (define/private (signal-ua-error conn-error? errorcode msg wrapped-exn)
       (send-exn-to-user
        (build-exn (cond [msg msg]
                         [conn-error? "connection error signaled by user agent"]
                         [else "stream error signaled by user agent"])
-                  (hash-set* info-for-exn
+                  (hash-set* (if wrapped-exn
+                                 (hash-set info-for-exn 'wrapped-exn wrapped-exn)
+                                 info-for-exn)
                              'code (if conn-error? 'ua-connection-error 'ua-stream-error)
                              'http2-error (decode-error-code errorcode)
                              'http2-errorcode errorcode)))
@@ -141,8 +143,7 @@
              (close-output-port user-out)]
             [else
              (with-handler (lambda (e)
-                             (send conn register-user-abort-request this)
-                             (raise e))
+                             (send conn register-user-abort-request this e))
                (call-with-continuation-barrier
                 (lambda ()
                   (data (lambda (data-bs) (write-bytes data-bs user-out)))
@@ -245,7 +246,10 @@
            ;; RFC says "any type"
            [(data headers push_promise window_update) (void)]
            [else (stream-error error:STREAM_CLOSED)])]
-        [(closed closed/by-me-recently) (my-error)]))
+        [(closed closed/by-me-recently)
+         (case transition
+           [(rst_stream) (raise 'escape-without-error)]
+           [else (my-error)])]))
 
     (define/private (set-state! new-state)
       #;(log-http2-debug "state ~s => ~s" state new-state)
@@ -295,13 +299,12 @@
     (define/public (handle-window_update flags delta)
       (adjust-out-flow-window delta))
 
-    (define/public (handle-user-abort)
-      ;; FIXME: raise better exn?
-      (stream-error error:CANCEL))
+    (define/public (handle-user-abort e)
+      (stream-error error:CANCEL "request canceled by exception from data procedure" e))
 
     (define/public (handle-ua-connection-error errorcode comment)
       (define msg (format "user agent signaled connection error\n  reason: ~a" comment))
-      (signal-ua-error #t errorcode msg))
+      (signal-ua-error #t errorcode msg #f))
 
     (define/public (handle-eof)
       (check-state 'rst_stream) ;; pretend

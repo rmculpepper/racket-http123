@@ -418,8 +418,8 @@
              resp-bxe]
             [else #f]))
 
-    (define/public (register-user-abort-request stream)
-      (define (do-register-abort) (send stream handle-user-abort))
+    (define/public (register-user-abort-request stream e)
+      (define (do-register-abort) (send stream handle-user-abort e))
       (thread-send manager-thread do-register-abort void))
 
     (define/public (abandon)
