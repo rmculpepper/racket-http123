@@ -2,8 +2,10 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 #lang racket/base
-(require racket/class
+(require (for-syntax racket/base)
+         racket/class
          racket/match
+         syntax/srcloc
          rackunit
          "private/interfaces.rkt"
          "private/response.rkt"
@@ -48,7 +50,15 @@
     ))
 (define parent (new fake-parent%))
 
-(define (test responses flags r2-rx)
+(begin-for-syntax
+  (define ((make-test-case-wrapper proc-id) stx)
+    (syntax-case stx ()
+      [(_ arg ...)
+       #`(test-case (source-location->string (quote-syntax #,stx))
+           #;(eprintf "** testing ~a\n" (source-location->string (quote-syntax #,stx)))
+           (#,proc-id arg ...))])))
+
+(define (test* responses flags r2-rx)
   (define-values (server-in out-to-server) (make-pipe))
   (define-values (client-in out-to-client) (make-pipe))
   (define server (make-server responses server-in out-to-client))
@@ -79,6 +89,8 @@
                        (void))])
       ((sync r2))
       (error "failed to raise exn"))))
+
+(define-syntax test (make-test-case-wrapper #'test*))
 
 (test '((200))
       '(no-r2) #f)

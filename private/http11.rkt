@@ -217,7 +217,7 @@
       (match-define (sending req bxe) sr)
       ((with-handlers ([exn? (lambda (e)
                                (log-http1-debug "error reading response from server: ~e" e)
-                               (close-from-reader #t)
+                               (close-from-reader #t #f)
                                (define e*
                                  (merge-exn e "error reading response from server"
                                             (hasheq 'request req
@@ -240,7 +240,7 @@
     ;; Got EOF from server at the beginning of a response.
     (define/private (reader/eof sr)
       (log-http1-debug "got EOF from server")
-      (close-from-reader #t)
+      (close-from-reader #t sr)
       (log-http1-debug "ending reader loop due to EOF from server"))
 
     ;; Got "Connection: close" from server in previous response.
@@ -249,11 +249,11 @@
       (close-from-reader #f)
       (log-http1-debug "ending reader loop due to Connection:close from server"))
 
-    (define/private (close-from-reader fail-queue?)
+    (define/private (close-from-reader fail-queue? [extra-sr #f])
       (define old-state (with-lock (begin0 state (set! state 'closed-by-reader))))
       (close-output-port out)
       (close-input-port in)
-      (when fail-queue? (fail-queue 'unknown))
+      (when fail-queue? (fail-queue 'unknown extra-sr))
       (when (eq? old-state 'open)
         (send parent on-actual-disconnect this)))
 
