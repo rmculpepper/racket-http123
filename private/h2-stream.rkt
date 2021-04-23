@@ -270,16 +270,19 @@
       (check-state 'data)
       (let ([len (payload-length flags payload)])
         (adjust-in-flow-window (- len)))
-      (define end? (flags-has? flags flag:END_STREAM))
-      (when end? (check-state 'end_stream))
-      (send pstate handle-data data end?))
+      (send pstate handle-data data)
+      (when (flags-has? flags flag:END_STREAM)
+        (check-state 'end_stream)
+        (send pstate handle-end-stream)))
 
     (define/public (handle-headers-payload flags payload)
       (match-define (fp:headers padlen _streamdep _weight hs) payload)
       (check-state 'headers)
+      (send pstate handle-headers hs)
       (define end? (flags-has? flags flag:END_STREAM))
-      (when end? (check-state 'end_stream))
-      (send pstate handle-headers hs end?))
+      (when (flags-has? flags flag:END_STREAM)
+        (check-state 'end_stream)
+        (send pstate handle-end-stream)))
 
     (define/public (handle-priority-payload flags payload)
       (match-define (fp:priority streamdep weight) payload)
@@ -303,6 +306,7 @@
       (adjust-out-flow-window delta))
 
     (define/public (handle-user-abort e)
+      ;; Note: server may have already processed request; see 8.1. So keep 'unknown.
       (stream-error error:CANCEL "request canceled by exception from data procedure" e))
 
     (define/public (handle-ua-connection-error errorcode comment)
@@ -463,12 +467,15 @@
     (abstract about)
     (define/public (teardown) (void))
 
-    (define/public (handle-data data end?)
+    (define/public (handle-data data)
       (bad-tx 'DATA))
-    (define/public (handle-headers header-entries end?)
+    (define/public (handle-headers header-entries)
       (bad-tx 'HEADERS))
     (define/public (handle-push_promise promised-streamid header-entries)
       (bad-tx 'PUSH_PROMISE))
+    (define/public (handle-end-stream)
+      (send stream stream-error error:PROTOCOL_ERROR
+            (format "unexpected END_STREAM flag from server\n  protocol state: ~a" (about))))
 
     (define/private (bad-tx tx)
       (send stream stream-error error:PROTOCOL_ERROR
@@ -477,13 +484,16 @@
     ;; Default implementations, usually not overridden:
 
     (define/public (handle-rst_stream errorcode)
-      (send-exn-to-user
-       (build-exn "stream closed by server (RST_STREAM)"
-                  (hash-set* (get-info-for-exn)
-                             'code 'RST_STREAM
-                             'http2-error (decode-error-code errorcode)
-                             'http2-errorcode errorcode)))
-      (change-pstate! (send stream make-done-pstate)))
+      (cond [(= errorcode error:NO_ERROR) ;; see 8.1
+             (void)]
+            [else
+             (send-exn-to-user
+              (build-exn "stream closed by server (RST_STREAM)"
+                         (hash-set* (get-info-for-exn)
+                                    'code 'RST_STREAM
+                                    'http2-error (decode-error-code errorcode)
+                                    'http2-errorcode errorcode)))
+             (change-pstate! (send stream make-done-pstate))]))
 
     (define/public (handle-goaway last-streamid errorcode debug)
       ;; If this streamid > last-streamid, then server has not processed
@@ -541,6 +551,12 @@
     (define/override (teardown)
       (close-input-port in-from-user))
 
+    (define/override (handle-rst_stream errorcode)
+      (cond [(= errorcode error:NO_ERROR)
+             ;; Server already send response independent of data; see 8.1.
+             (change-pstate! (send stream make-expect-header-pstate))]
+            [else (super handle-rst_stream)]))
+
     (define/private (send-request-data-from-user)
       ;; PRE: in-from-user is ready for input
       (define streamid (send stream get-streamid))
@@ -580,12 +596,22 @@
 
     (define/override (about) 'expect-header)
 
-    (define/override (handle-headers header end?)
+    (define/override (handle-headers header)
       (send stream set-received! 'yes)
-      (log-http2-debug "#~s returning header to user" (send stream get-streamid))
-      (box-evt-set! resp-bxe (make-response-thunk header))
-      (cond [end? (change-pstate! (send stream make-done-pstate))]
-            [else (change-pstate! (send stream make-reading-response-pstate))]))
+      (cond [(informational-response? header)
+             (log-http2-debug "#~s discarding Informational header"
+                              (send stream get-streamid))
+             ;; FIXME: do something with this header??
+             (void)]
+            [else
+             (log-http2-debug "#~s returning header to user" (send stream get-streamid))
+             (box-evt-set! resp-bxe (make-response-thunk header))
+             (change-pstate! (send stream make-reading-response-pstate))]))
+
+    (define/private (informational-response? header)
+      (match header
+        [(cons (list* #":status" (regexp #rx#"^1") _) _) #t]
+        [_ #f]))
 
     (define/private (make-response-thunk header-entries)
       ;; Create a promise so that work happens in user thread.
@@ -626,19 +652,17 @@
 
     ;; FIXME: Check that we get DATA* HEADERS? END, not any (DATA | HEADERS)* END.
 
-    (define/override (handle-data data end?)
-      (write-bytes data out-to-user)
-      (when end?
-        (close-output-port out-to-user)
-        (change-pstate! (send stream make-done-pstate))))
+    (define/override (handle-data data)
+      (write-bytes data out-to-user))
 
-    (define/override (handle-headers header-entries end?)
+    (define/override (handle-end-stream)
+      (close-output-port out-to-user)
+      (change-pstate! (send stream make-done-pstate)))
+
+    (define/override (handle-headers header-entries)
       (log-http2-debug "#~s returning trailer to user" (send stream get-streamid))
       (define trailer-promise (make-header-promise stream header-entries "trailer"))
-      (box-evt-set! trailerbxe (lambda () (force trailer-promise)))
-      (when end?
-        (close-output-port out-to-user)
-        (change-pstate! (send stream make-done-pstate))))
+      (box-evt-set! trailerbxe (lambda () (force trailer-promise))))
 
     (define/override (handle-push_promise promised-streamid header)
       (send (get-conn) handle-push_promise promised-streamid header))
