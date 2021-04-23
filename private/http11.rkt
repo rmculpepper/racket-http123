@@ -275,14 +275,20 @@
     ;; Response (Input)
 
     (define/private (read-response req)
-      (define method (request-method req))
       (define-values (status-line status-version status-code) (read-status-line))
       (define raw-header (read-raw-header))
       (define header (make-header-from-lines raw-header))
+      (cond [(regexp-match? #rx"^1.." status-code) ;; Informational
+             (log-http1-debug "discarding Informational response")
+             (read-response req)]
+            [else (read-response* req status-line status-code header)]))
+
+    (define/private (read-response* req status-line status-code header)
+      (define method (request-method req))
       (log-http1-debug "got header")
       (define no-content? ;; RFC 7230 Section 3.3.3, cases 1 and 2
         (or (eq? method 'HEAD)
-            (regexp-match? #rx"^1.." status-code) ;; Informational
+            (regexp-match? #rx"^1.." status-code) ;; Informational, but see above
             (regexp-match? #rx"^204" status-code) ;; No Content
             (regexp-match? #rx"^304" status-code) ;; Not Modified
             (and (eq? method 'CONNECT)
