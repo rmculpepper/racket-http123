@@ -10,6 +10,9 @@
 @(define (rfc7231 fragment . content)
    (apply hyperlink (format "https://tools.ietf.org/html/rfc7231#~a" fragment) content))
 
+@(define (h2rfc fragment . content)
+   (apply hyperlink (format "https://tools.ietf.org/html/rfc7540#~a" fragment) content))
+
 @(begin
   (define the-eval (make-base-eval))
   (the-eval '(require http123)))
@@ -27,17 +30,39 @@
 
 Represents an @deftech{HTTP error}---a protocol or communication error.
 
-Some common keys in @racket[info]:
+Here are some common keys in @racket[info]. The presence or absence of any of
+these keys depends on the specific error.
 @itemlist[
+
 @item{@racket['version] --- either @racket['http/1.1] or @racket['http/2]}
-@item{@racket['request] --- the @racket[request] that the error corresponds to}
-@item{@racket['received] --- one of @racket['yes], @racket['no], or
-@racket['unknown]; indicates whether the request was received and processed by
-the server}
+
 @item{@racket['code] --- a symbol indicating what kind of error occurred, in a
-form more suitable for comparison than parsing the error message}
+form more suitable for comparison than parsing the error message; the following
+is an incomplete list of values that indicate that more information is present
+in the @racket['http2-error] key:
+@itemlist[
+@item{@racket['ua-connection-error] --- The user agent (this library) closed the
+connection.}
+@item{@racket['ua-stream-error] --- The user agent (this library) closed the
+stream, but not necessarily the connection.}
+@item{@racket['RST_STREAM] --- The server closed the stream, but not necessarily
+the connection.}
+@item{@racket['GOAWAY] --- The server closed the connection.}
+]}
+
+@item{@racket['http2-error] --- a symbol indicating an http/2
+@h2rfc["section-7"]{error code} (eg, @racket['PROTOCOL_ERROR]) or
+@racket['unknown] if the error code is unfamiliar}
+
+@item{@racket['request] --- the @racket[request] that the error corresponds to}
+
+@item{@racket['received] --- one of @racket['yes], @racket['no], or
+@racket['unknown], indicating whether the request was received and processed by
+the server}
+
 @item{@racket['wrapped-exn] --- contains a more specific exception that
 represents the immediate source of the error}
+
 ]}
 
 
@@ -183,6 +208,8 @@ Note: Future versions of this library may add more possible results.
 @defmethod[(get-status-code) (integer-in 100 599)]{
 
 Returns the response's @rfc7231["section-6"]{status code}.
+
+Note: this library currently discards all Informational (1xx) responses.
 }
 
 @defmethod[(get-status-class) (or/c 'informational
@@ -193,6 +220,8 @@ Returns the response's @rfc7231["section-6"]{status code}.
 
 Returns a symbol describing the @rfc7231["section-6"]{status class} of the
 response's status code.
+
+Note: this library currently discards all Informational (1xx) responses.
 }
 
 @defmethod[(get-header) (is-a?/c header<%>)]{
@@ -288,6 +317,52 @@ Equivalent to
 
 @; ------------------------------------------------------------
 @section[#:tag "notes"]{Notes}
+
+@subsection[#:tag "known-issues"]{Known Issues and Limitations}
+
+The following features are currently unsupported:
+@itemlist[
+
+@item{http/2 without TLS (aka, ``h2c'')}
+@item{the @tt{CONNECT} method}
+@item{the @tt{Upgrade} header field (http/1.1) --- Note: the http/2 protocol
+disallows @tt{Upgrade}.}
+@item{Informational (1xx) responses --- This library silently discards
+Informational (1xx) responses.}
+@item{the @tt{Expect: 100-continue} header field --- It is allowed, but this
+library ignores any @tt{100 Continue} response (see previous), and it never
+delays sending the request message body.}
+@item{``server push'' streams (@tt{PUSH_PROMISE}) (http/2) --- The client's
+initial @tt{SETTINGS} frame at connection startup disables the feature.}
+@item{stream priorities (http/2)}
+@item{various limits on protocol elements, with reasonable defaults}
+
+]
+
+There are various things that should be configurable that currently are not. A
+few examples:
+@itemlist[
+
+@item{flow control window sizes (http/2)}
+@item{HPACK indexing policy, including never-index fields (http/2)}
+
+]
+
+@subsection[#:tag "log"]{Loggers}
+
+This library logs on the following topics:
+@itemlist[
+
+@item{@tt{http} --- about high-level client operations, connection creation and
+management, and dispatching to http/1.1 or http/2 implementations}
+
+@item{@tt{http1} --- about connections, request, and responses using the
+http/1.1 protocol}
+
+@item{@tt{http2} --- about connections, streams, requests, and responses using
+the http/2 protocol}
+
+]
 
 @subsection[#:tag "evt-result"]{Synchronizable Event Results}
 
