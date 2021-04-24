@@ -12,8 +12,10 @@
 ;; Reference:
 ;; - https://tools.ietf.org/html/rfc7541
 
-;; Note on normalization: RFC 7541 says header names are treated as
-;; opaque sequences of octets. But HTTP/2 .... (FIXME)
+;; Note on header field names: RFC 7541 says field names are treated
+;; as opaque sequences of octets. But HTTP/2 requires canonical form
+;; (lower-cased). This module assumes inputs are already in canonical
+;; form.
 
 ;; ----------------------------------------
 
@@ -82,18 +84,9 @@
      (dtable-check-evict dt)]))
 
 ;; ------------------------------------------------------------
+;; Indexing policy
 
-;; References:
-;; - https://github.com/nghttp2/nghttp2/blob/master/lib/nghttp2_hd.c
-;;   Their policy:
-;;     NEVER for Authorization (all), Cookie (w/ length < 20) because
-;;       they might contain low-entropy secrets
-;;     NO to :path, Age, Content-Length, ETag, If-Modified-Since, If-None-Match,
-;;       Location, Set-Cookie
-
-;; Default policy:
-;; Default to indexing Authorization and Cookie. Maybe override if
-;; client expects to use low-entropy secrets.
+;; See notes in documentation.
 
 (define default-indexing-policy
   #hash((default                . no)
@@ -119,8 +112,8 @@
 
 (define (key-index-mode overrides key)
   (or (hash-ref overrides key #f)
-      (hash-ref default-indexing-policy key #f)
       (hash-ref overrides 'default #f)
+      (hash-ref default-indexing-policy key #f)
       (hash-ref default-indexing-policy key 'no)))
 
 ;; ------------------------------------------------------------

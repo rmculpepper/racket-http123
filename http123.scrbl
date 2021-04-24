@@ -518,5 +518,36 @@ disadvantage to this approach is that it cannot be further wrapped with
 exception-handling code. That is, a user that @racket[sync]s on @emph{multiple}
 such events cannot tell which one raised the exception.
 
+@subsection[#:tag "hpack-indexing"]{HPACK Indexing Policy}
+
+HPACK (the compression scheme for http/2 headers) is designed to reduce
+vulnerability to attacks like CRIME, which can discover secrets in headers by
+injecting data into the header and observing the effectiveness of header
+compression. Part of this defense is intrinsic, but HPACK additionally allows
+senders to choose which header fields are ``indexed''---that is, entered into
+the dynamic compression table, to further protect secret header data. For
+example, some http/2 client libraries automatically mark @tt{Authorization}
+fields and short @tt{Cookie} fields as not-indexed, since they might contain
+low-entropy secret data.
+
+This library indexes @tt{Authorization} and @tt{Cookie} fields by default. In
+general, it does not mark any header fields as not-indexed based on security
+rationale, although it does avoid indexing for other reasons. For example, it
+does not index @tt{If-Modified-Since} header fields, since they are unlikely to
+have the same value from request to request.
+
+Users of this library should follow this policy: If a request has a header field
+with secret data, then the user should not allow an untrusted source to
+influence the value of the same header field in any other request made on the
+same connection. For example, if you make (or might make) a request with an
+@tt{Authorization} header field containing your password, you should not make
+any other requests on the same connection with an @tt{Authorization} header
+whose value is influenced by an untrusted party.
+
+Future versions of this library may make the indexing policy configurable.
+
+See the @hpackrfc["section-7"]{HPACK Security Considerations} for more details.
+
+
 @; ------------------------------------------------------------
 @(close-eval the-eval)
