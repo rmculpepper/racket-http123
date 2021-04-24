@@ -11,6 +11,9 @@
          "header.rkt")
 (provide (all-defined-out))
 
+;; FIXME/TODO:
+;; - record headers actually sent, including UA-synthesized (eg, Host)
+
 (define http-response<%>
   (interface ()
     [get-version

@@ -144,7 +144,7 @@
         ;; FIXME: belongs to another layer...
         (when (header-entries-missing? hls #"user-agent")
           (fprintf out "user-agent: ~a\r\n" default-user-agent))
-        (when (header-entries-missing? hls #"(accept-encoding")
+        (when (header-entries-missing? hls #"accept-encoding")
           (fprintf out "accept-encoding: ~a\r\n" default-accept-encoding))
         (cond [(procedure? data)
                (fprintf out "transfer-encoding: chunked\r\n")]
