@@ -12,7 +12,7 @@
          "io.rkt"
          "request.rkt"
          "h2-frame.rkt"
-         "h2-pack.rkt")
+         "hpack.rkt")
 (provide (all-defined-out))
 
 (define INIT-FLOW-WINDOW (sub1 (expt 2 16)))

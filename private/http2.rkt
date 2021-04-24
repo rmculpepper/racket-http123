@@ -12,8 +12,8 @@
          "io.rkt"
          "request.rkt"
          "response.rkt"
+         "hpack.rkt"
          "h2-frame.rkt"
-         "h2-pack.rkt"
          "h2-stream.rkt")
 (provide (all-defined-out))
 
