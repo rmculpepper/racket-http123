@@ -18,6 +18,10 @@
    data         ;; (U #f Bytes ((Bytes -> Void) -> Void))
    )
   #:guard (lambda (method loc header data _)
+            (unless (memq method known-method-names)
+              (define parts
+                (apply string-append (map (lambda (n) (format " '~a" n)) known-method-names)))
+              (raise-argument-error 'request (format "(or/c~a)" parts) method))
             (define u
               (cond [(or (url? loc) (string? loc)) (check-http-url 'request loc loc)]
                     [else (raise-argument-error 'request "(or/c string? url?)" loc)]))
@@ -69,3 +73,6 @@
 
           (PATCH   . ()) ;; RFC 5789
           ))
+
+(define known-method-names
+  '(GET HEAD POST PUT DELETE OPTIONS TRACE PATCH))
