@@ -6,7 +6,7 @@
          racket/contract/base
          racket/match
          racket/tcp
-         net/url-string
+         net/url-structs
          openssl
          "interfaces.rkt"
          "request.rkt"

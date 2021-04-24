@@ -5,7 +5,6 @@
 (require racket/class
          racket/match
          racket/promise
-         net/url-string
          binaryio/reader
          "interfaces.rkt"
          "header.rkt"

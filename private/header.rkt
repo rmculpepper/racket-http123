@@ -5,8 +5,6 @@
 (require racket/class
          racket/contract/base
          racket/match
-         racket/list
-         racket/symbol
          "interfaces.rkt"
          "regexp.rkt"
          "header-base.rkt"

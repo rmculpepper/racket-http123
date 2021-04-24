@@ -5,7 +5,6 @@
 (require racket/class
          racket/contract/base
          racket/match
-         racket/port
          file/gunzip
          "interfaces.rkt"
          "io.rkt"

@@ -2,14 +2,11 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 #lang racket/base
-(require racket/class
-         racket/contract/base
-         racket/match
+(require racket/match
          racket/list
          racket/symbol
          "interfaces.rkt"
-         "regexp.rkt"
-         "util.rkt")
+         "regexp.rkt")
 (provide (all-defined-out))
 
 ;; References:
@@ -250,9 +247,6 @@
 
 ;; ============================================================
 ;; Misc Bytes Utils
-
-(define (bytes->symbol bs)
-  (string->symbol (bytes->string/latin-1 bs)))
 
 (define (bytes->nat v) ;; Bytes -> Nat or #f
   (define s (and v (bytes->string/latin-1 v)))

@@ -3,15 +3,10 @@
 
 #lang racket/base
 (require racket/class
-         racket/promise
          racket/match
          binaryio/reader
-         openssl
          "interfaces.rkt"
-         "header.rkt"
          "io.rkt"
-         "request.rkt"
-         "response.rkt"
          "hpack.rkt"
          "h2-frame.rkt"
          "h2-stream.rkt")

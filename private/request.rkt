@@ -4,9 +4,8 @@
 #lang racket/base
 (require racket/match
          net/url-structs
-         net/url-string
          "interfaces.rkt"
-         "header.rkt"
+         "header-base.rkt"
          "util.rkt")
 (provide (all-defined-out))
 
