@@ -40,6 +40,9 @@
 
 (define INIT-TARGET-IN-FLOW-WINDOW (expt 2 20)) ;; FIXME: config?
 
+(define RECV-TIMEOUT-MS 10e3) ;; FIXME: config? ok default?
+(define CLOSED-TIMEOUT-MS 2e3) ;; FIXME: config? ok default?
+
 (define standard-init-config
   (hasheq 'header-table-size 4096
           'enable-push 1
@@ -86,11 +89,14 @@
     ;; is-closed? : (U #f 'by-goaway 'by-error 'user-abandoned 'EOF)
     ;; Value is #f if allowed to start new streams; symbol if not allowed.
     (define is-closed? #f)
+    (define closed-ms #f)
     (define/public (open?) (not is-closed?))
     (define/public (closed?) (not (open?)))
 
     (define/private (set-closed! reason)
-      (unless is-closed? (set! is-closed? reason)))
+      (unless is-closed?
+        (set! is-closed? reason)
+        (set! closed-ms (current-inexact-milliseconds))))
 
     ;; ----------------------------------------
 
@@ -332,6 +338,33 @@
       (unless (< in-flow-window FLOW-WINDOW-BOUND)
         (connection-error error:FLOW_CONTROL_ERROR "window too large")))
 
+    ;; ------------------------------------------------------------
+    ;; Timeouts
+
+    (define last-recv-ms (current-milliseconds))
+
+    (define/private (get-recv-timeout-alarm-evt)
+      (cond [(or is-closed? (positive? (hash-count stream-table))) never-evt]
+            [else (alarm-evt (+ last-recv-ms RECV-TIMEOUT-MS))]))
+
+    (define/private (recv-timeout)
+      ;; PRE: no live streams, it has been TIMEOUT-MS since any receives
+      ;; FIXME: use PING, multiple timeouts before closing
+      (unless is-closed?  ;; could have been abandoned since evt creation
+        (log-http2-debug "timeout, abandoning connection")
+        (set-closed! 'timeout)
+        (send-goaway)))
+
+    (define/private (get-closed-timeout-alarm-evt)
+      (if closed-ms (alarm-evt (+ closed-ms CLOSED-TIMEOUT-MS)) never-evt))
+
+    (define/private (closed-timeout)
+      ;; PRE: is-closed?
+      (close-input-port in)
+      (close-output-port out)
+      (for ([stream (in-hash-values stream-table)])
+        (send stream handle-timeout)))
+
     ;; ============================================================
     ;; Connection threads (2 per connection)
 
@@ -350,17 +383,16 @@
         (handle-evt (thread-receive-evt)
                     (lambda (tre)
                       (define fr (thread-receive))
-                      (with-handlers ([exn?
-                                       (lambda (e)
-                                         ((error-display-handler) (exn-message e) e))])
-                        (handle-frame-or-other fr)))))
+                      (handle-frame-or-other fr))))
       (define manager-bored-evt
-        (wrap-evt (if #f
-                      (guard-evt
-                       (lambda ()
-                         (alarm-evt (+ (current-inexact-milliseconds) #e5e3))))
-                      never-evt)
+        (wrap-evt (if #f (sleep-evt 5) never-evt)
                   (lambda (ignored) (log-http2-debug "manager is bored!"))))
+      (define recv-timeout-evt
+        (handle-evt (guard-evt (lambda () (get-recv-timeout-alarm-evt)))
+                    (lambda (ignored) (recv-timeout))))
+      (define closed-timeout-evt
+        (handle-evt (guard-evt (lambda () (get-closed-timeout-alarm-evt)))
+                    (lambda (ignored) (closed-timeout))))
       ;; ----
       (define (loop/streams-changed)
         (define work-evts
@@ -374,17 +406,29 @@
                         [(lambda (e) (eq? e 'stream-error)) void])
           (sync streams-evt
                 reader-evt
+                recv-timeout-evt
+                closed-timeout-evt
                 manager-bored-evt))
         (flush-frames)
         (if (begin0 streams-changed? (set! streams-changed? #f))
             (loop/streams-changed)
             (loop streams-evt)))
+      ;; ----
       (with-handlers ([(lambda (e) (eq? e 'connection-error))
-                       (lambda (e) (log-http2-debug "manager stopped due to connection error"))])
+                       (lambda (e) (log-http2-debug "manager stopped due to connection error"))]
+                      [(lambda (e) #t)
+                       (lambda (e)
+                         (when exn? ((error-display-handler) (exn-message e) e))
+                         (log-http2-debug "manager stopped due to uncaught exn: ~e" e))])
         (loop/streams-changed)))
 
     (define/private (reader)
-      (cond [(eof-object? (peek-byte in))
+      (sync in) ;; wait for input or EOF or closed
+      (cond [(port-closed? in)
+             (log-http2-debug "<-- closed")
+             (thread-send manager-thread 'EOF void) ;; treat like EOF
+             (void)]
+            [(eof-object? (peek-byte in))
              (log-http2-debug "<-- EOF")
              (thread-send manager-thread 'EOF void)
              (void)]
@@ -394,13 +438,14 @@
              (log-http2-debug "<-- ~a"
                               (parameterize ((error-print-width 60))
                                 (format "~e" fr)))
+             (set! last-recv-ms (current-inexact-milliseconds))
              (thread-send manager-thread fr void)
              (reader)]))
 
     (define manager-thread (thread (lambda () (manager))))
     (define reader-thread (thread (lambda () (reader))))
 
-    ;; ========================================
+    ;; ============================================================
     ;; Methods called from user thread
 
     (define/public (open-request req)
@@ -426,18 +471,19 @@
       (thread-send manager-thread do-register-abort void))
 
     (define/public (abandon)
-      (define (do-abandon)
-        (define payload (fp:goaway last-server-streamid error:NO_ERROR #""))
-        (queue-frame (frame type:GOAWAY 0 0 payload))
-        (flush-frames)
-        ;; Don't close/abandon output port, because may need to write eg
-        ;; WINDOW_UPDATE frames to finish receiving from existing streams.
-        (void))
       (unless is-closed?
         (set-closed! 'user-abandoned)
-        (thread-send manager-thread do-abandon void)))
+        (thread-send manager-thread (lambda () (send-goaway)) void)))
 
-    ;; ========================================
+    ;; ============================================================
+    ;; Hello, Goodbye
+
+    (define/private (send-goaway)
+      (define payload (fp:goaway last-server-streamid error:NO_ERROR #""))
+      (queue-frame (frame type:GOAWAY 0 0 payload))
+      ;; Don't close/abandon output port, because may need to write eg
+      ;; WINDOW_UPDATE frames to finish receiving from existing streams.
+      (void))
 
     (define/private (send-handshake my-new-config)
       (write-bytes http2-client-preface out)

@@ -98,7 +98,8 @@
     (define/public (stream-error errorcode [msg #f] [wrapped-exn #f])
       (log-http2-debug "stream error: code = ~s, message = ~e" errorcode msg)
       (queue-frame (frame type:RST_STREAM 0 streamid (fp:rst_stream errorcode)))
-      (signal-ua-error #f errorcode msg wrapped-exn))
+      (signal-ua-error #f errorcode msg wrapped-exn)
+      (raise 'stream-error))
 
     (define/private (signal-ua-error conn-error? errorcode msg wrapped-exn)
       (send-exn-to-user
@@ -111,8 +112,7 @@
                              'code (if conn-error? 'ua-connection-error 'ua-stream-error)
                              'http2-error (decode-error-code errorcode)
                              'http2-errorcode errorcode)))
-      (change-pstate! (make-done-pstate))
-      (raise 'stream-error))
+      (change-pstate! (make-done-pstate)))
 
     ;; ------------------------------------------------------------
     ;; User communication
@@ -131,7 +131,8 @@
     (define/public (send-exn-to-user e)
       (box-evt-set! resp-bxe (lambda () (raise e)))
       (box-evt-set! trailerbxe (lambda () (raise e)))
-      (raise-user-in-exn e))
+      (unless (port-closed? out-to-user)
+        (raise-user-in-exn e)))
 
     (define/public (get-user-communication)
       (values (make-pump-data-out) resp-bxe))
@@ -220,11 +221,12 @@
         [(idle)
          (case transition
            [(headers) (set-state! 'open)]
+           [(rst_stream) (set-state! 'closed/by-me-recently)]
            [else (my-error)])]
         [(reserved/local) ;; Only for servers
          (case transition
            [(headers) (set-state! 'half-closed/remote)]
-           [(rst_stream) (set-state! 'closed)]
+           [(rst_stream) (set-state! 'closed/by-me-recently)]
            [else (my-error)])]
         [(reserved/remote)
          (case transition
@@ -316,6 +318,10 @@
     (define/public (handle-eof)
       (check-state 'rst_stream) ;; pretend
       (send pstate handle-eof))
+
+    (define/public (handle-timeout)
+      (check-send-state 'rst_stream) ;; pretend
+      (send pstate handle-timeout))
 
     ;; ------------------------------------------------------------
     ;; Sending frames to the server
@@ -513,6 +519,13 @@
        (build-exn "connection closed by server (EOF)"
                   (hash-set* (get-info-for-exn)
                              'code 'server-EOF)))
+      (change-pstate! (send stream make-done-pstate)))
+
+    (define/public (handle-timeout)
+      (send-exn-to-user
+       (build-exn "connection closed by user agent (timeout)"
+                  (hash-set* (get-info-for-exn)
+                             'code 'ua-timeout)))
       (change-pstate! (send stream make-done-pstate)))
     ))
 

@@ -9,6 +9,14 @@
 
 ;; ============================================================
 
+(define (sleep-evt sec)
+  (guard-evt
+   (lambda ()
+     (alarm-evt
+      (+ (current-inexact-milliseconds) (* 1000.0 sec))))))
+
+;; ============================================================
+
 ;; Warning: this might interact strangely with finalization...
 (define abandon-table (make-weak-hasheq))
 
