@@ -144,16 +144,16 @@
 
 ;; pstate-base% handle-rst_stream:
 (test1e (list #rx"stream closed by server \\(RST_STREAM\\)"
-              (hasheq 'version 'http/2 'code 'RST_STREAM 'received 'unknown
+              (hasheq 'version 'http/2 'code 'server-reset-stream 'received 'unknown
                       'http2-error 'ENHANCE_YOUR_CALM))
         (list (frame type:RST_STREAM 0 3 (fp:rst_stream error:ENHANCE_YOUR_CALM))))
 (test1e (list #rx"stream closed by server \\(RST_STREAM\\)"
-               (hasheq 'version 'http/2 'code 'RST_STREAM 'received 'unknown
+               (hasheq 'version 'http/2 'code 'server-reset-stream 'received 'unknown
                        'http2-error 'CONNECT_ERROR))
         (list (frame type:RST_STREAM 0 3 (fp:rst_stream error:CONNECT_ERROR))))
 
 (test1e (list #rx"connection closed by server \\(GOAWAY\\)"
-              (hasheq 'version 'http/2 'code 'GOAWAY 'received 'no 'http2-error 'NO_ERROR))
+              (hasheq 'version 'http/2 'code 'server-goaway 'received 'no 'http2-error 'NO_ERROR))
         (list (frame type:GOAWAY 0 0 (fp:goaway 1 error:NO_ERROR #"bye"))))
 
 (test1e (list #rx"connection closed by server \\(EOF\\)"
