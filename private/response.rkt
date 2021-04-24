@@ -22,7 +22,7 @@
     [get-header
      (->m (is-a?/c header<%>))]
     [get-content-in
-     (->m (or/c #f input-port?))]
+     (->*m [] [boolean?] (or/c #f input-port?))]
     [get-trailer
      (->m (or/c #f (is-a?/c header<%>)))]
     [get-trailer-evt
@@ -49,7 +49,8 @@
       (status-code->class status-code))
     (define/public (get-header) header)
     (define/public (has-content?) (and content-in #t))
-    (define/public (get-content-in) content-in)
+    (define/public (get-content-in [empty-port? #f])
+      (or content-in (if empty-port? (open-input-bytes #"") #f)))
 
     (abstract get-version)
 

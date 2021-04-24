@@ -15,6 +15,9 @@
 @(define (h2rfc fragment . content)
    (apply hyperlink (format "https://tools.ietf.org/html/rfc7540#~a" fragment) content))
 
+@(define (hpackrfc fragment . content)
+   (apply hyperlink (format "https://tools.ietf.org/html/rfc7541#~a" fragment) content))
+
 @(begin
   (define-runtime-path log-file "private/eval-log.rktd")
   (define the-eval (make-log-based-eval log-file 'replay))
@@ -356,11 +359,13 @@ Returns @racket[#t] if the response has a @h11rfc["section-3.3"]{message body},
 @racket[#f] otherwise.
 }
 
-@defmethod[(get-content-in) (or/c #f input-port?)]{
+@defmethod[(get-content-in [port-if-no-body? boolean? #f])
+           (or/c #f input-port?)]{
 
 If the response includes a @h11rfc["section-3.3"]{message body}, returns an
 input port that reads from the message body. If the response does not contain a
-message body, returns @racket[#f].
+message body, then if @racket[port-if-no-body?] is true, returns an empty input
+port, otherwise returns @racket[#f].
 
 If the response's @tt{Content-Encoding} is either @tt{gzip} or @tt{deflate}, the
 message body is automatically decompressed, and the result input port reads from
@@ -390,9 +395,9 @@ Returns the response's @h11rfc["section-4.1.2"]{trailer}, or @racket[#f] if no
 trailer exists (for example, if an http/1.1 response did not use chunked
 transfer encoding).
 
-This method blocks until the response has been fully received. See also
-@method[http-response<%> get-trailer-evt]. It may raise an exception reflecting an
-error reading the response.
+This method blocks until the response has been fully received; see also
+@method[http-response<%> get-trailer-evt]. This method may raise an exception
+reflecting an error reading the response.
 }
 
 @defmethod[(get-trailer-evt) (evt/c (-> (or/c #f (is-a?/c header<%>))))]{
@@ -448,18 +453,25 @@ represents the immediate source of the error}
 The following features are currently unsupported:
 @itemlist[
 
-@item{http/2 without TLS (aka, ``h2c'')}
-@item{the @tt{CONNECT} method}
+@item{http/2 without TLS (aka, @h2rfc["section-3.2"]{``h2c''})}
+
+@item{the @rfc7231["section-4.3.6"]{@tt{CONNECT}} method}
+
 @item{the @tt{Upgrade} header field (http/1.1) --- Note: the http/2 protocol
-disallows @tt{Upgrade}.}
+@h2rfc["section-8.1.2.2"]{disallows} @tt{Upgrade}.}
+
 @item{Informational (1xx) responses --- This library silently discards
-Informational (1xx) responses.}
+@rfc7231["section-6.2"]{Informational (1xx) responses}.}
+
 @item{the @tt{Expect: 100-continue} header field --- It is allowed, but this
 library ignores any @tt{100 Continue} response (see previous), and it never
 delays sending the request message body.}
+
 @item{``server push'' streams (@tt{PUSH_PROMISE}) (http/2) --- The client's
 initial @tt{SETTINGS} frame at connection startup disables the feature.}
-@item{stream priorities (http/2)}
+
+@item{stream @h2rfc["section-5.3"]{priorities} (http/2)}
+
 @item{various limits on protocol elements, with reasonable defaults}
 
 ]
@@ -469,7 +481,9 @@ few examples:
 @itemlist[
 
 @item{flow control window sizes (http/2)}
-@item{HPACK indexing policy, including never-index fields (http/2)}
+
+@item{HPACK indexing policy, including @hpackrfc["section-7.1.3"]{never-index
+fields} (http/2)}
 
 ]
 
