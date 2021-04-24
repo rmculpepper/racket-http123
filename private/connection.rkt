@@ -3,6 +3,7 @@
 
 #lang racket/base
 (require racket/class
+         racket/contract/base
          racket/match
          racket/tcp
          net/url-string
@@ -13,21 +14,18 @@
          "http2.rkt")
 (provide (all-defined-out))
 
-(define (connect host port ssl)
-  (new http-connection% (host host) (port port) (ssl ssl)))
-
-
-;; FIXME: need way of restricting versions to allow eg for tunneling
-;; (only http/1.1), eg websockets
-;; - NO, makes more sense for tunneling to require creating a fresh
-;;   http/1.1 connection specifically for the tunnel
-;; - but restricting version is good for testing
+(define http-connection<%>
+  (interface ()
+    [async-request
+     (->m request? (evt/c (-> any)))]
+    ))
 
 (define http-connection%
   (class* object% (#; http-connection<%>)
     (init-field host
                 port
-                ssl)
+                ssl
+                [protocols '(http/2 http/1.1)])
     (super-new)
 
     (define/public (get-host) host)
@@ -54,7 +52,15 @@
               [else #f])))
 
     (define/private (open-actual-connection)
-      (cond [ssl
+      (define try-http1? (memq 'http/1.1 protocols))
+      (define try-http2? (memq 'http/2 protocols))
+      (log-http-debug "connecting to ~e" (format "~a:~a" host port))
+      (cond [(not ssl)
+             (define-values (in out)
+               (tcp-connect host port))
+             (log-http-debug "connected without TLS, http/1.1")
+             (make-http1 in out)]
+            [(and try-http1? try-http2?)
              (define-values (in out)
                (ssl-connect host port ssl #:alpn '(#"h2" #"http/1.1")))
              (case (ssl-get-alpn-selected in)
@@ -63,19 +69,33 @@
                 (make-http2 in out)]
                [(#"http/1.1")
                 (log-http-debug "connected with TLS, ALPN=http/1.1")
-                (make-http1 in out #f)]
+                (make-http1 in out)]
                [else
-                (log-http-debug "connected with TLS, no ALPN, so http/1.1")
-                (make-http1 in out #f)])]
-            [else
+                (log-http-debug "connected with TLS, http/1.1 (no ALPN selected)")
+                (make-http1 in out)])]
+            [try-http2?
              (define-values (in out)
-               (tcp-connect host port))
-             (log-http-debug "connected without TLS, http/1.1")
-             (make-http1 in out #t)]))
+               (ssl-connect host port ssl #:alpn '(#"h2")))
+             (case (ssl-get-alpn-selected in)
+               [(#"h2")
+                (log-http-debug "connected with TLS, ALPN=h2")
+                (make-http2 in out)]
+               [else
+                (log-http-debug "connected with TLS, no ALPN selected, failing")
+                (close-input-port in)
+                (close-output-port out)
+                (h-error "connection error: http/2 not supported~a"
+                         ";\n the server accepted the connection but did not select ALPN=h2")])]
+            [try-http1?
+             (define-values (in out)
+               (ssl-connect host port ssl))
+             (log-http-debug "connected with TLS, http/1.1 (did not use ALPN)")
+             (make-http1 in out)]
+            [else (h-error "no protocols available")]))
 
-    (define/private (make-http1 in out try-upgrade?)
+    (define/private (make-http1 in out)
       (new http11-actual-connection% (parent this)
-           (in in) (out out) (try-upgrade? try-upgrade?)))
+           (in in) (out out)))
     (define/private (make-http2 in out)
       (new http2-actual-connection% (parent this)
            (in in) (out out)))
@@ -107,10 +127,6 @@
 
     ;; ----------------------------------------
 
-    ;; sync-request : Request -> Response
-    (define/public (sync-request req)
-      ((sync (async-request req))))
-
     ;; async-request : Request -> (BoxEvt (-> Response))
     (define/public (async-request req)
       (define TRIES 2)
@@ -120,16 +136,4 @@
         (define ac (get-actual-connection))
         (cond [(send ac open-request req) => values]
               [else (begin (send ac abandon) (loop (add1 attempts)))])))
-
     ))
-
-#;
-(begin (define hs '((#"user-agent" #"Racket (http123)") (#"accept-encoding" #"gzip")))
-       (define req (request 'GET (string->url "https://www.google.com/") hs #f))
-       (define c (connect "www.google.com" 443 'auto)))
-#; (define r (send c sync-request req))
-
-#;
-(begin (define req1 (request 'GET (string->url "http://www.neverssl.com/") hs #f))
-       (define c1 (connect "www.neverssl.com" 80 #f)))
-#; (define r1 (send c1 sync-request req1))

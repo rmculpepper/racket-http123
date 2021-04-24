@@ -29,6 +29,8 @@
 ;; A Sending is (sending Request BoxEvt[Response])
 (struct sending (req resp-bxe))
 
+(define TIMEOUT-MS 10e3) ;; FIXME: config? ok default?
+
 ;; Represents an actual connection, without reconnect ability.
 ;; Thread-safe:
 ;; - Sends are done in the user thread making the request, with a lock
@@ -185,19 +187,23 @@
          (parameterize ((uncaught-exception-handler
                          (let ([h (uncaught-exception-handler)])
                            (lambda (e)
-                             (log-http1-error "unhandled exception in reader thread")
+                             (log-http1-error "unhandled exception in reader thread: ~e" e)
                              (h e)))))
            (reader)))))
 
     (define/private (reader)
       ;; Waiting for either SR from queue or EOF from server (if in?=#t).
       (let loop ([in? #t])
+        (define eof-evt
+          (handle-evt (if in? in never-evt)
+                      (lambda (ignored)
+                        (if (eof-object? (peek-byte in)) (reader/eof #f) (loop #f)))))
+        (define timeout-evt
+          (handle-evt (alarm-evt (+ (current-inexact-milliseconds) TIMEOUT-MS))
+                      (lambda (ignored) (reader/timeout))))
         (sync (dequeue-evt (lambda (sr) (reader/sr sr)))
-              (cond [in? (wrap-evt in
-                                   (lambda (ignored)
-                                     (cond [(eof-object? (peek-byte in)) (reader/eof #f)]
-                                           [else (loop #f)])))]
-                    [else never-evt]))))
+              eof-evt
+              timeout-evt)))
 
     ;; Got SR from queue; try to read response (or EOF) from server.
     (define/private (reader/sr sr)
@@ -208,13 +214,14 @@
       (match-define (sending req bxe) sr)
       ((with-handlers ([exn? (lambda (e)
                                (log-http1-debug "error reading response from server: ~e" e)
-                               (close-from-reader #t #f)
+                               (close-from-reader 'error #t #f)
                                (define e*
-                                 (merge-exn e "error reading response from server"
+                                 (build-exn "error reading response from server"
                                             (hasheq 'request req
                                                     'version 'http/1.1
-                                                    'received 'yes
-                                                    'code 'error-reading-response)))
+                                                    'received 'unknown
+                                                    'code 'error-reading-response
+                                                    'wrapped-exn e)))
                                (box-evt-set! bxe (lambda () (raise e*)))
                                (lambda ()
                                  (log-http1-debug "ending reader loop due to error")
@@ -228,37 +235,50 @@
          (cond [close? (lambda () (reader/close))]
                [else (lambda () (reader))]))))
 
+    (define/private (reader/timeout)
+      (log-http1-debug "timeout")
+      (close-from-reader 'timeout #t #f)
+      (log-http1-debug "ending reader loop due to timeout"))
+
     ;; Got EOF from server at the beginning of a response.
     (define/private (reader/eof sr)
       (log-http1-debug "got EOF from server")
-      (close-from-reader #t sr)
+      (close-from-reader 'eof #t #f)
       (log-http1-debug "ending reader loop due to EOF from server"))
 
     ;; Got "Connection: close" from server in previous response.
     (define/private (reader/close)
       (fail-queue 'no)
-      (close-from-reader #f)
+      (close-from-reader 'close #f)
       (log-http1-debug "ending reader loop due to Connection:close from server"))
 
-    (define/private (close-from-reader fail-queue? [extra-sr #f])
+    (define/private (close-from-reader why fail-queue? [extra-sr #f])
       (define old-state (with-lock (begin0 state (set! state 'closed-by-reader))))
       (close-output-port out)
       (close-input-port in)
-      (when fail-queue? (fail-queue 'unknown extra-sr))
+      (when fail-queue? (fail-queue why 'unknown extra-sr))
       (when (eq? old-state 'open)
         (send parent on-actual-disconnect this)))
 
-    (define/private (fail-queue received [extra-sr #f])
+    (define/private (fail-queue why received [extra-sr #f])
       (let* ([queue (or (with-lock (begin0 queue (set! queue #f))) null)]
              [queue (if extra-sr (cons extra-sr queue) queue)])
         (log-http1-debug "failing ~s queued requests with status: ~e" (length queue) received)
         (for ([sr (in-list queue)])
           (match-define (sending req resp-bxe) sr)
-          (box-evt-set! resp-bxe (lambda () (connection-closed-error req received))))))
+          (box-evt-set! resp-bxe (lambda () (connection-closed-error why req received))))))
 
-    (define/private (connection-closed-error req received)
-      (h1-error "connection closed by server"
-                #:info (hasheq 'code 'connection-closed-by-server
+    (define/private (connection-closed-error why req received)
+      (h1-error (case why
+                  [(timeout) "connection closed by user agent (timeout)"]
+                  [(error) "connection closed due to read error"]
+                  [(close) "connection closed by server (Connection: close)"]
+                  [(eof) "connection closed by server (EOF)"])
+                #:info (hasheq 'code (case why
+                                       [(timeout) 'ua-timeout]
+                                       [(error) 'read-error]
+                                       [(close) 'server-closed]
+                                       [(eof) 'server-EOF])
                                'request req
                                'received received)))
 
@@ -338,17 +358,17 @@
       (cond
         ;; Reference: https://tools.ietf.org/html/rfc7230, Section 3.3.3 (Message Body Length)
         [(send header has-value? 'transfer-encoding #"chunked") ;; Case 3
-         (log-http1-debug "reading content with Transfer-Encoding:chunked")
+         (log-http1-debug "reading content (Transfer-Encoding: chunked)")
          (make-pump/chunked br)]
         [(send header get-integer-value 'content-length) ;; Case 5
          => (lambda (len)
-              (log-http1-debug "reading content with Content-Length:~a" len)
+              (log-http1-debug "reading content (Content-Length: ~a)" len)
               (cond [(< len CONTENT-LENGTH-READ-NOW)
                      (define content (b-read-bytes br len))
                      (values content void #f)]
                     [else (make-pump/content-length br len)]))]
         [else ;; Case 7
-         (log-http1-debug "reading content until EOF, no Transfer-Encoding or Content-Length")
+         (log-http1-debug "reading content (until EOF)")
          (abandon-out 'abandoned-by-reader)
          (make-pump/until-eof in)]))
     ))
@@ -370,6 +390,7 @@
 (define (make-pump/content-length br len)
   (define (forward/content-length out-to-user)
     (write-bytes (b-read-bytes br len) out-to-user)
+    (log-http1-debug "finished reading message body (Content-Length)")
     (close-output-port out-to-user))
   (make-pump forward/content-length))
 
@@ -378,6 +399,7 @@
     (let loop ()
       (define next (read-bytes PIPE-SIZE in))
       (cond [(eof-object? next)
+             (log-http1-debug "finished reading message body (EOF)")
              (close-input-port in)
              (close-output-port out-to-user)]
             [else (begin (write-bytes next out-to-user) (loop))])))
@@ -407,6 +429,7 @@
              (let ([trailers (read-trailer)])
                (define p (delay/sync (make-header-from-lines trailers)))
                (box-evt-set! trailerbxe (lambda () (force p))))
+             (log-http1-debug "finished reading message body (Transfer-Encoding: chunked)")
              (close-output-port out-to-user)]
             [else
              (define chunk-data (b-read-bytes br chunk-size))

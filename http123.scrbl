@@ -421,19 +421,7 @@ absence of any of these keys depends on the specific error.
 @item{@racket['version] --- either @racket['http/1.1] or @racket['http/2]}
 
 @item{@racket['code] --- a symbol indicating what kind of error occurred, in a
-form more suitable for comparison than parsing the error message; the following
-is an incomplete list of values that indicate that more information is present
-in the @racket['http2-error] key:
-@itemlist[
-@item{@racket['ua-connection-error] --- The user agent (this library) closed the
-connection.}
-@item{@racket['ua-stream-error] --- The user agent (this library) closed the
-stream, but not necessarily the connection.}
-@item{@racket['server-reset-stream] --- The server closed the stream, but not
-necessarily the connection.}
-@item{@racket['server-goaway] --- The server closed the connection.}
-
-]}
+form more suitable for comparison than parsing the error message}
 
 @item{@racket['http2-error] --- a symbol indicating an http/2
 @h2rfc["section-7"]{error code} (eg, @racket['PROTOCOL_ERROR]) or

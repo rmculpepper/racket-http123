@@ -509,7 +509,7 @@
         (send-exn-to-user
          (build-exn "connection closed by server (GOAWAY)"
                     (hash-set* (get-info-for-exn)
-                               'code 'server-goaway
+                               'code 'server-closed
                                'http2-error (decode-error-code errorcode)
                                'http2-errorcode errorcode)))
         (change-pstate! (send stream make-done-pstate))))
