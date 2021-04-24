@@ -429,9 +429,10 @@ in the @racket['http2-error] key:
 connection.}
 @item{@racket['ua-stream-error] --- The user agent (this library) closed the
 stream, but not necessarily the connection.}
-@item{@racket['RST_STREAM] --- The server closed the stream, but not necessarily
-the connection.}
-@item{@racket['GOAWAY] --- The server closed the connection.}
+@item{@racket['server-reset-stream] --- The server closed the stream, but not
+necessarily the connection.}
+@item{@racket['server-goaway] --- The server closed the connection.}
+
 ]}
 
 @item{@racket['http2-error] --- a symbol indicating an http/2

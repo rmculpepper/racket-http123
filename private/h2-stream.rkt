@@ -490,7 +490,7 @@
              (send-exn-to-user
               (build-exn "stream closed by server (RST_STREAM)"
                          (hash-set* (get-info-for-exn)
-                                    'code 'RST_STREAM
+                                    'code 'server-reset-stream
                                     'http2-error (decode-error-code errorcode)
                                     'http2-errorcode errorcode)))
              (change-pstate! (send stream make-done-pstate))]))
@@ -503,7 +503,7 @@
         (send-exn-to-user
          (build-exn "connection closed by server (GOAWAY)"
                     (hash-set* (get-info-for-exn)
-                               'code 'GOAWAY
+                               'code 'server-goaway
                                'http2-error (decode-error-code errorcode)
                                'http2-errorcode errorcode)))
         (change-pstate! (send stream make-done-pstate))))
