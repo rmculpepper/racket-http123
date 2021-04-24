@@ -5,7 +5,7 @@
 (require racket/class
          racket/contract/base
          racket/match
-         net/url-string
+         net/url-structs
          "interfaces.rkt"
          "header.rkt"
          "request.rkt"

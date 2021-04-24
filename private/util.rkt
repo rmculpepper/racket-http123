@@ -3,6 +3,7 @@
 
 #lang racket/base
 (require racket/match
+         net/uri-codec
          net/url-structs
          net/url-string)
 (provide (all-defined-out))
@@ -83,9 +84,10 @@
 (define (url->host-string u)
   (match u
     [(url scheme user host port #t path query fragment)
+     (define enc-host (uri-encode host))
      (string->immutable-string
-      (cond [(or (not port) (equal? port (scheme-default-port scheme))) host]
-            [else (format "~a:~a" host port)]))]))
+      (cond [(or (not port) (equal? port (scheme-default-port scheme))) enc-host]
+            [else (format "~a:~a" enc-host port)]))]))
 
 (define (url->host-bytes u)
   (string->bytes/ascii (url->host-string u)))

@@ -140,7 +140,7 @@
         ;; RFC 7230 Section 5.4 (Host): The Host header field is required, and
         ;; it must be the same as the authority component of the target URI
         ;; (minus userinfo).
-        (fprintf out "host: ~a\r\n" (url->host-bytes u))
+        (fprintf out "host: ~a\r\n" (url->host-string u))
         ;; FIXME: belongs to another layer...
         (when (header-entries-missing? hls #"user-agent")
           (fprintf out "user-agent: ~a\r\n" default-user-agent))
@@ -173,9 +173,6 @@
             [else (void)])
       (flush-output out)
       (log-http1-debug "end send request"))
-
-    (define/private (url->host-bytes u)
-      (send parent url->host-bytes u))
 
     ;; ============================================================
     ;; Reader thread

@@ -6,7 +6,6 @@
          racket/contract/base
          racket/match
          racket/tcp
-         net/url-structs
          openssl
          "interfaces.rkt"
          "request.rkt"
@@ -114,16 +113,6 @@
         (when (eq? conn ac)
           (log-http-debug "disconnected actual connection")
           (set! conn #f))))
-
-    ;; ----------------------------------------
-
-    (define/public (url->host-bytes u)
-      (define scheme (url-scheme u))
-      (define host (or (url-host u) (get-host)))
-      (define port (or (url-port u) (get-port)))
-      (string->bytes/utf-8
-       (cond [(= port (case scheme [("http") 80] [("https") 443] [else #f])) host]
-             [else (format "~a:~a" host port)])))
 
     ;; ----------------------------------------
 
