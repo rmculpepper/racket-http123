@@ -199,18 +199,23 @@
   (map check-flexible-header-field hs))
 (define (check-flexible-header-field hf)
   (define (bad) (h-error "bad header field\n  field: ~e" hf))
+  (define (return key val)
+    (when (member key reserved-header-keys/bytes)
+      (h-error "request contains header field reserved for user-agent\n  field: ~e" key
+               #:info (hasheq 'code 'reserved-request-header-field)))
+    (list key val))
   (match hf
     [(list key value)
-     (list (check-flexible-header-key key) (check-flexible-header-value value))]
+     (return (check-flexible-header-key key) (check-flexible-header-value value))]
     [(? bytes?)
      (match (regexp-match (rx^$ HEADER-FIELD) hf)
        [(list _ key val)
-        (list (check-flexible-header-key key) (bytes->immutable-bytes val))]
+        (return (check-flexible-header-key key) (bytes->immutable-bytes val))]
        [_ (bad)])]
     [(? string?)
      (match (regexp-match (rx^$ HEADER-FIELD) (string->bytes/utf-8 hf))
        [(list _ key val)
-        (list (check-flexible-header-key key) (bytes->immutable-bytes val))]
+        (return (check-flexible-header-key key) (bytes->immutable-bytes val))]
        [_ (bad)])]
     [_ (bad)]))
 (define (check-flexible-header-key key0)
@@ -218,8 +223,10 @@
   (let loop ([key key0])
     (match key
       [(? symbol?) (loop (symbol->string key))]
-      [(? bytes? (regexp (rx^$ TOKEN))) (imm key)]
-      [(? string? (regexp (rx^$ TOKEN))) (imm (string->bytes/latin-1 key))]
+      [(? bytes? (regexp (rx^$ lower-TOKEN))) (imm key)]
+      [(? string? (regexp (rx^$ lower-TOKEN))) (imm (string->bytes/latin-1 key))]
+      [(? bytes? (regexp (rx^$ TOKEN))) (loop (bytes->string/latin-1 key))]
+      [(? string? (regexp (rx^$ TOKEN))) (loop (string-downcase key))]
       [else (h-error "bad header field key\n  key: ~e" key0)])))
 (define (check-flexible-header-value value)
   (match value

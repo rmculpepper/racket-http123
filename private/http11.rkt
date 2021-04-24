@@ -114,12 +114,11 @@
     ;; open-request : Request -> #f or (BoxEvt (-> Response))
     ;; Returns evt if request sent and queued, #f if cannot send in current state.
     (define/public (open-request req)
-      (define hls (check-req-header (request-header req)))
       (start-sending)
       (cond [(and (eq? state 'open) (not send-in-progress?))
              (define resp-bxe (make-box-evt))
              (set! send-in-progress? #t)
-             (-send-request req hls)
+             (-send-request req)
              (or (enqueue (sending req resp-bxe))
                  (connection-closed-error req 'unknown))
              (set! send-in-progress? #f)
@@ -132,8 +131,8 @@
                               state (if send-in-progress? " (send in progress failed)" ""))
              #f]))
 
-    (define/private (-send-request req hls)
-      (match-define (request method u _ data) req)
+    (define/private (-send-request req)
+      (match-define (request method u hls data) req)
       (log-http1-debug "start send request")
       (fprintf out "~a ~a HTTP/1.1\r\n" method (url->bytes u))
       (begin
@@ -173,14 +172,6 @@
             [else (void)])
       (flush-output out)
       (log-http1-debug "end send request"))
-
-    (define/private (check-req-header hs)
-      (for ([h (in-list hs)])
-        (match-define (list* k v _) h)
-        (when (member k reserved-header-keys/bytes)
-          (h1-error "request contains header field reserved for user-agent\n  field: ~e" h
-                    (hasheq 'code 'reserved-request-header-field))))
-      hs)
 
     (define/private (url->host-bytes u)
       (send parent url->host-bytes u))
