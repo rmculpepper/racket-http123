@@ -6,9 +6,10 @@
          racket/contract/base
          racket/match
          racket/port
+         file/gunzip
          "interfaces.rkt"
-         "header.rkt"
-         "decode.rkt")
+         "io.rkt"
+         "header.rkt")
 (provide (all-defined-out))
 
 (define http-response<%>
@@ -88,6 +89,24 @@
           [else content]))
       (super-new (header header) (content content*)))
     ))
+
+;; get-decode-mode : Header -> (U 'gzip 'deflate #f)
+(define (get-decode-mode header)
+  (cond [(send header has-value? 'content-encoding #"gzip") 'gzip]
+        [(send header has-value? 'content-encoding #"deflate") 'deflate]
+        [else #f]))
+
+(define (make-decode-input-wrapper decode-mode decode-in)
+  (cond [(memq decode-mode '(gzip deflate))
+         (define-values (user-in out-to-user raise-user-exn) (make-wrapped-pipe))
+         (thread (lambda ()
+                   (with-handlers ([exn? (lambda (e) (raise-user-exn e))])
+                     (case decode-mode
+                       [(gzip) (gunzip-through-ports decode-in out-to-user)]
+                       [(deflate) (inflate decode-in out-to-user)]))
+                   (close-output-port out-to-user)))
+         user-in]
+        [else decode-in]))
 
 ;; ----------------------------------------
 
