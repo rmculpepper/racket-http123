@@ -104,3 +104,12 @@
 
 (define (url->bytes u)
   (string->bytes/ascii (url->string u)))
+
+;; ----
+
+(module pretty racket/base
+  (require racket/serialize)
+  (serializable-struct pretty (s)
+    #:property prop:custom-write
+    (lambda (self out mode) (write-string (pretty-s self) out)))
+  (provide (all-defined-out)))

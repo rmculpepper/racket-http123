@@ -13,8 +13,12 @@
 (provide (struct-out exn:fail:http123)
          (struct-out request)
          ok-http-url?
+         http-client
          header<%>
          header-key-symbol?
          http-client-base<%>
          http-client<%>
          http-response<%>)
+
+(define (http-client)
+  (new http-client%))
