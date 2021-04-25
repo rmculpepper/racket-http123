@@ -13,7 +13,7 @@
 (struct request
   (method       ;; Symbol, like 'GET
    url          ;; URL
-   hfields      ;; HeaderFieldList
+   header       ;; HeaderFieldList
    data         ;; (U #f Bytes ((Bytes -> Void) -> Void))
    )
   #:guard (lambda (method loc header data _)
