@@ -133,7 +133,7 @@
              #f]))
 
     (define/private (-send-request req)
-      (match-define (request method u hls data) req)
+      (match-define (request method u hfields data) req)
       (log-http1-debug "start send request")
       (fprintf out "~a ~a HTTP/1.1\r\n" method (url->bytes u))
       (begin
@@ -142,9 +142,9 @@
         ;; (minus userinfo).
         (fprintf out "host: ~a\r\n" (url->host-string u))
         ;; FIXME: belongs to another layer...
-        (when (header-entries-missing? hls #"user-agent")
+        (when (header-field-list-missing? hfields #"user-agent")
           (fprintf out "user-agent: ~a\r\n" default-user-agent))
-        (when (header-entries-missing? hls #"accept-encoding")
+        (when (header-field-list-missing? hfields #"accept-encoding")
           (fprintf out "accept-encoding: ~a\r\n" default-accept-encoding))
         (cond [(procedure? data)
                (fprintf out "transfer-encoding: chunked\r\n")]
@@ -154,8 +154,8 @@
                ;; If no content data, don't add Content-Length header field.
                ;; FIXME!!!
                (void)]))
-      (for ([hl (in-list hls)])
-        (fprintf out "~a\r\n" hl))
+      (for ([hfield (in-list hfields)])
+        (fprintf out "~a\r\n" (header-field->line hfield)))
       (fprintf out "\r\n")
       (cond [(procedure? data)
              (let ([out out])

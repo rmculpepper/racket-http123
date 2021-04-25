@@ -12,67 +12,6 @@
 ;; References:
 ;; - HTTP/1.1: https://tools.ietf.org/html/rfc7230
 
-(define (header-key-symbol? v)
-  (and (symbol? v)
-       (or (and (common-symbol->bytes v) #t)
-           (header-key-name? (symbol->immutable-string v)))))
-
-;; ============================================================
-;; FlexibleHeaderList
-
-;; A FlexibleHeaderList is (Listof FlexibleHeaderField).
-;; A FlexibleHeaderField is one of
-;; - (list FlexibleHeaderKey FlexibleHeaderValue)
-;; - Bytes                  -- matching HEADER
-;; - String                 -- matching HEADER
-;; FlexibleHeaderKey = Symbol | Bytes | String  -- matching TOKEN
-;; FlexibleHeaderValue = String | Bytes         -- matching OWS FIELD-VALUE OWS
-
-;; check-flexible-header-list : FlexibleHeaderList -> (Listof HeaderEntry)
-(define (check-flexible-header-list hs)
-  (map check-flexible-header-field hs))
-(define (check-flexible-header-field hf)
-  (define (bad) (h-error "bad header field\n  field: ~e" hf))
-  (define (return key val)
-    (when (member key reserved-header-keys/bytes)
-      (h-error "request contains header field reserved for user-agent\n  field: ~e" key
-               #:info (hasheq 'code 'reserved-request-header-field)))
-    (list key val))
-  (match hf
-    [(list key value)
-     (return (check-flexible-header-key key) (check-flexible-header-value value))]
-    [(? bytes?)
-     (match (regexp-match (rx^$ HEADER-FIELD) hf)
-       [(list _ key val)
-        (return (check-flexible-header-key key) (bytes->immutable-bytes val))]
-       [_ (bad)])]
-    [(? string?)
-     (match (regexp-match (rx^$ HEADER-FIELD) (string->bytes/utf-8 hf))
-       [(list _ key val)
-        (return (check-flexible-header-key key) (bytes->immutable-bytes val))]
-       [_ (bad)])]
-    [_ (bad)]))
-(define (check-flexible-header-key key0)
-  (define (imm bs) (bytes->immutable-bytes bs))
-  (let loop ([key key0])
-    (match key
-      [(? symbol?) (loop (symbol->string key))]
-      [(? bytes? (regexp (rx^$ lower-TOKEN))) (imm key)]
-      [(? string? (regexp (rx^$ lower-TOKEN))) (imm (string->bytes/latin-1 key))]
-      [(? bytes? (regexp (rx^$ TOKEN))) (loop (bytes->string/latin-1 key))]
-      [(? string? (regexp (rx^$ TOKEN))) (loop (string-downcase key))]
-      [else (h-error "bad header field key\n  key: ~e" key0)])))
-(define (check-flexible-header-value value)
-  (match value
-    [(? bytes? (regexp (rx^$ (rx OWS (record FIELD-VALUE) OWS)) (list _ field-value)))
-     (bytes->immutable-bytes field-value)]
-    [(? string? (regexp (rx^$ (rx OWS (record FIELD-VALUE) OWS)) (list _ field-value)))
-     (bytes->immutable-bytes (string->bytes/latin-1 field-value))]
-    [_ (h-error "bad header field value\n  value: ~e" value)]))
-
-(define (header-entries-missing? hs key)
-  (not (assoc key hs)))
-
 
 ;; ============================================================
 ;; Header syntax utils
@@ -96,7 +35,84 @@
 
 
 ;; ============================================================
+;; HeaderFieldList
+
+;; InHeaderFieldList = (Listof InHeaderField)
+;; InHeaderField is one of
+;; - (list InHeaderFieldKey InHeaderFieldValue)
+;; - Bytes                                      -- matching HEADER-FIELD
+;; - String                                     -- matching HEADER-FIELD
+;; InHeaderFieldKey = Symbol | Bytes | String   -- matching TOKEN
+;; InHeaderFieldValue = String | Bytes          -- matching OWS FIELD-VALUE OWS
+
+;; HeaderFieldList = (Listof NormalHeaderField)
+;; HeaderField = (list HeaderFieldKey HeaderFieldValue)
+;; HeaderFieldKey = ImmutableBytes              -- matching lower-TOKEN
+;; HeaderFieldValue = ImmutableBytes            -- matching FIELD-VALUE
+
+;; check-header-field-list : InHeaderFieldList -> HeaderFieldList
+(define (check-header-field-list hs)
+  (map check-header-field hs))
+
+;; check-header-field : InHeaderField -> HeaderField
+(define (check-header-field hf)
+  (define (bad) (h-error "malformed header field\n  field: ~e" hf
+                         #:info (hasheq 'code 'malformed-header-field)))
+  (match hf
+    [(list key value)
+     (list (check-header-field-key key) (check-header-field-value value))]
+    [(? bytes?)
+     (match (regexp-match (rx^$ HEADER-FIELD) hf)
+       [(list _ key val)
+        (list (check-header-field-key key) (bytes->immutable-bytes val))]
+       [_ (bad)])]
+    [(? string?)
+     (match (regexp-match (rx^$ HEADER-FIELD) (string->bytes/utf-8 hf))
+       [(list _ key val)
+        (list (check-header-field-key key) (bytes->immutable-bytes val))]
+       [_ (bad)])]
+    [_ (bad)]))
+
+;; check-header-field-key : InHeaderFieldKey -> HeaderFieldKey
+(define (check-header-field-key key0)
+  (define (imm bs) (bytes->immutable-bytes bs))
+  (let loop ([key key0])
+    (match key
+      [(? symbol?) (loop (symbol->string key))]
+      [(? bytes? (regexp (rx^$ lower-TOKEN))) (imm key)]
+      [(? string? (regexp (rx^$ lower-TOKEN))) (imm (string->bytes/latin-1 key))]
+      [(? bytes? (regexp (rx^$ TOKEN))) (loop (bytes->string/latin-1 key))]
+      [(? string? (regexp (rx^$ TOKEN))) (loop (string-downcase key))]
+      [else (h-error "bad header field key\n  key: ~e" key0
+                     #:info (hasheq 'code 'bad-header-field-key))])))
+
+;; check-header-field-value : InHeaderFieldValue -> HeaderFieldValue
+(define (check-header-field-value value)
+  (match value
+    [(? bytes? (regexp (rx^$ (rx OWS (record FIELD-VALUE) OWS)) (list _ field-value)))
+     (bytes->immutable-bytes field-value)]
+    [(? string? (regexp (rx^$ (rx OWS (record FIELD-VALUE) OWS)) (list _ field-value)))
+     (bytes->immutable-bytes (string->bytes/latin-1 field-value))]
+    [_ (h-error "bad header field value\n  value: ~e" value
+                #:info (hasheq 'code 'bad-header-field-value))]))
+
+;; header-field-list-missing? : HeaderFieldList Bytes -> Boolean
+(define (header-field-list-missing? hs key)
+  (not (assoc key hs)))
+
+;; header-field->line : HeaderField -> Bytes
+(define (header-field->line hfield)
+  (match-define (list key val) hfield)
+  (bytes-append key #": " val))
+
+
+;; ============================================================
 ;; Header key forms
+
+(define (header-key-symbol? v)
+  (and (symbol? v)
+       (or (and (common-symbol->bytes v) #t)
+           (header-key-name? (symbol->immutable-string v)))))
 
 ;; header-key->symbol : HeaderKey -> Symbol, or #f if fail-ok?
 (define (header-key->symbol key [fail-ok? #f])
@@ -246,20 +262,7 @@
 
 
 ;; ============================================================
-;; Misc Bytes Utils
-
-(define (bytes->nat v) ;; Bytes -> Nat or #f
-  (define s (and v (bytes->string/latin-1 v)))
-  (define n (and s (string->number s)))
-  (and (exact-nonnegative-integer? n) n))
-
-(define (bytes-join bss sep)
-  (apply bytes-append (add-between bss sep)))
-
-(define (symbol->bytes s)
-  (string->bytes/utf-8 (symbol->string s)))
-
-;; ============================================================
+;; Reserved header field keys
 
 (define reserved-header-keys
   '(host
@@ -280,3 +283,18 @@
     #"transfer-encoding"
     #"te"
     #"trailer"))
+
+
+;; ============================================================
+;; Misc Bytes Utils
+
+(define (bytes->nat v) ;; Bytes -> Nat or #f
+  (define s (and v (bytes->string/latin-1 v)))
+  (define n (and s (string->number s)))
+  (and (exact-nonnegative-integer? n) n))
+
+(define (bytes-join bss sep)
+  (apply bytes-append (add-between bss sep)))
+
+(define (symbol->bytes s)
+  (string->bytes/utf-8 (symbol->string s)))

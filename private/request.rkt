@@ -13,7 +13,7 @@
 (struct request
   (method       ;; Symbol, like 'GET
    url          ;; URL
-   header       ;; (Listof HeaderEntry)
+   hfields      ;; HeaderFieldList
    data         ;; (U #f Bytes ((Bytes -> Void) -> Void))
    )
   #:guard (lambda (method loc header data _)
@@ -26,7 +26,12 @@
                     [else (raise-argument-error 'request "(or/c string? url?)" loc)]))
             (define hs
               (with-entry-point 'request
-                (check-flexible-header-list header)))
+                (check-header-field-list header)))
+            (for ([hfield (in-list hs)])
+              (match-define (list key val) hfield)
+              (when (member key reserved-header-keys/bytes)
+                (h-error "request contains header field reserved for user-agent\n  field: ~e" key
+                         #:info (hasheq 'code 'reserved-request-header-field))))
             (unless (or (eq? #f data) (bytes? data) (procedure? data))
               (raise-argument-error 'request "(or/c #f bytes? procedure?)" data))
             (values method u hs data))
