@@ -12,7 +12,7 @@
          "private/http2.rkt"
          "private/response.rkt"
          "private/h2-frame.rkt"
-         "private/h2-pack.rkt")
+         "private/hpack.rkt")
 
 (define prelude
   (make-parameter
