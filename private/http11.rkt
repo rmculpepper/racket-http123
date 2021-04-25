@@ -163,9 +163,11 @@
                (call-with-continuation-barrier
                 (lambda ()
                   (data (λ (bs)
-                          (define len (bytes-length bs))
-                          (unless (zero? len)
-                            (fprintf out "~x\r\n~a\r\n" len bs))))
+                          (when out
+                            (define len (bytes-length bs))
+                            (unless (zero? len)
+                              (fprintf out "~x\r\n~a\r\n" len bs))
+                            (void))))
                   (set! out #f))))
              (fprintf out "0\r\n\r\n")]
             [(bytes? data)

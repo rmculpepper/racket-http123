@@ -150,7 +150,7 @@
                              (send conn register-user-abort-request this e))
                (call-with-continuation-barrier
                 (lambda ()
-                  (data (lambda (data-bs) (write-bytes data-bs user-out)))
+                  (data (lambda (data-bs) (void (write-bytes data-bs user-out))))
                   (close-output-port user-out))))]))
 
     ;; ------------------------------------------------------------
