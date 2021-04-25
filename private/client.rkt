@@ -128,8 +128,8 @@
 
 #;
 (begin (define hs '((#"user-agent" #"Racket (http123)") (#"accept-encoding" #"gzip")))
-       (define req (request 'GET (string->url "https://www.google.com/") hs #f))
-       (define req1 (request 'GET (string->url "http://www.neverssl.com/") hs #f))
+       (define req (request 'GET "https://www.google.com/" hs #f))
+       (define req1 (request 'GET "http://www.neverssl.com/" hs #f))
        (define c (new http-client%)))
 
 ;; FIXME: beware empty paths: (GET "https://www.google.com") fails!
