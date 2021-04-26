@@ -92,7 +92,7 @@
     [(? bytes? (regexp (rx^$ (rx OWS (record FIELD-VALUE) OWS)) (list _ field-value)))
      (bytes->immutable-bytes field-value)]
     [(? string? (regexp (rx^$ (rx OWS (record FIELD-VALUE) OWS)) (list _ field-value)))
-     (bytes->immutable-bytes (string->bytes/latin-1 field-value))]
+     (bytes->immutable-bytes field-value)]
     [_ (h-error "bad header field value\n  value: ~e" value
                 #:info (hasheq 'code 'bad-header-field-value))]))
 

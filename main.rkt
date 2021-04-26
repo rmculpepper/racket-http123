@@ -12,15 +12,26 @@
          "private/client.rkt"
          "private/util.rkt")
 (provide (struct-out exn:fail:http123)
-         (struct-out request)
+         request
+         request?
+         request-method
+         request-url
+         request-header
+         request-data
          ok-http-url?
          http-client
          header<%>
          header-key-symbol?
          http-client-base<%>
          http-client<%>
-         http-response<%>)
+         http-response<%>
+         current-response)
 
-(define (http-client #:add-header [add-header null])
+(define (http-client #:add-header [new-header null]
+                     #:add-response-handlers [new-response-handlers null]
+                     #:add-content-handlers [new-content-handlers null])
   (define c (new http-client%))
-  (send c fork #:add-header add-header))
+  (send c fork
+        #:add-header new-header
+        #:add-response-handlers new-response-handlers
+        #:add-content-handlers new-content-handlers))

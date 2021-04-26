@@ -61,7 +61,7 @@
                (close)))
          (define port (make close/check-for-abandon))
          (define (do-abandon p)
-           (thread-cell-set! abandon-cell #t) (close-input-port))
+           (thread-cell-set! abandon-cell #t) (close-input-port p))
          (hash-set! abandon-table port do-abandon)]
         [else (make close)]))
 
@@ -157,7 +157,7 @@
                        exn-evt)]
           [(eof-object? r) (check-at-eof) r]
           [else r]))
-  (define (close) (close-input-port))
+  (define (close) (close-input-port in))
   (define (abandon) (abandon-port in))
   (define get-progress-evt
     (and (port-provides-progress-evts? in)

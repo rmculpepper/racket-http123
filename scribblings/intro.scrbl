@@ -4,21 +4,83 @@
           racket/runtime-path
           "util.rkt"
           (for-label racket/base racket/contract racket/class
-                     net/url-structs net/url-string
+                     net/url-structs net/url-string json
                      http123))
 
 @(begin
   (define-runtime-path log-file "log-intro.rktd")
   (define the-eval (make-log-based-eval log-file 'replay))
-  (the-eval '(require http123 racket/class racket/port racket/pretty
+  (the-eval '(require http123 racket/class racket/port racket/pretty json
                       (submod http123/private/util pretty))))
 
 @; ------------------------------------------------------------
 @title[#:tag "intro"]{Introduction to http123}
 
-@bold{Note: } This section describes how to use the library given the current
-interfaces. When progress is made on the high-level client interface, this
-section will be updated.
+
+@section[#:tag "client-intro"]{Introduction to the Client API}
+
+Create a client with default header fields and content handlers for
+expected content types:
+@examples[#:eval the-eval #:label #f
+(define client (http-client
+                #:add-header
+                `([x-racket-version ,(version)])
+                #:add-content-handlers
+                `([application/json ,read-json])))
+]
+
+Construct a request with a method and URL:
+@examples[#:eval the-eval #:label #f
+(define time-req (request 'GET "http://date.jsontest.com/"))
+]
+A request can also contain a header and data (a message body). Fields
+in the request header override any fields of the same name in the
+client's default header.
+
+Execute the request and handle the response:
+@examples[#:eval the-eval #:label #f
+(send client handle time-req)
+]
+The @tt{Content-Type} of this response is @tt{application/json}, which
+the client is configured to handle using @racket[read-json].
+
+If the client has no handler for the response's content type, it
+raises an exception. For example:
+@examples[#:eval the-eval #:label #f
+(eval:error
+ (send client handle (request 'GET "https://tools.ietf.org/rfc/rfc7540.txt")))
+]
+
+You can create a new client with additional handlers by calling the
+@method[http-client<%> fork] method. The resulting client shares its
+connections with the original client.
+@examples[#:eval the-eval #:label #f
+(define client2
+  (send client fork
+        #:add-content-handlers
+        `([text/plain ,(lambda (in) (read-string 40 in))]
+          [*/* ,(lambda (in)
+                  (format "something called ~s, I guess"
+                          (send (current-response) get-content-type)))])))
+(send client2 handle (request 'GET "https://tools.ietf.org/rfc/rfc7540.txt"))
+(send client2 handle (request 'GET "https://www.google.com/"))
+]
+
+By default, the content handlers are only called for responses with
+status code 200 (``Found''). The default response handler raises an
+exception for any other response.
+@examples[#:eval the-eval #:label #f
+(define client3
+  (send client2 fork
+        #:add-response-handlers
+        `([404 ,(lambda (client resp) 'not-found)]
+          [client-error ,(lambda (client resp) 'failed)])))
+(send client3 handle (request 'GET "https://racket-lang.org/secret-plans.scrbl"))
+(send client3 handle (request 'GET "https://mirror.racket-lang.org/no-such-file.html"))
+]
+
+
+@section[#:tag "base-intro"]{Introduction to the Base API}
 
 Create a client:
 @examples[#:eval the-eval #:label #f
