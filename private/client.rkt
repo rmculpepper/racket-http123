@@ -122,6 +122,7 @@
         [else (unhandled-response resp)]))
 
     (define/public (unhandled-response resp)
+      (send resp close-content-in)
       (h-error "no handler matched for ~a response"
                (send resp get-status-class)
                #:info (hasheq 'code 'unhandled-response
@@ -139,6 +140,10 @@
           (default-content-handler resp type)))
 
     (define/public (default-content-handler resp type)
+      (unhandled-content resp type))
+
+    (define/public (unhandled-content resp type)
+      (send resp close-content-in)
       (h-error "no content handler matched for ~a content-type" (or type "unknown")
                #:info (hasheq 'code 'unhandled-response-content
                               'content-type type

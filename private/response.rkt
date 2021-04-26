@@ -31,6 +31,8 @@
      (->m (or/c #f symbol?))]
     [get-content-in
      (->*m [] [boolean?] (or/c #f input-port?))]
+    [close-content-in
+     (->m void?)]
     [get-trailer
      (->m (or/c #f (is-a?/c header<%>)))]
     [get-trailer-evt
@@ -65,6 +67,8 @@
       (or content-in (if empty-port? (open-input-bytes #"") #f)))
     (define/public (get-content-type)
       (send header get-content-type))
+    (define/public (close-content-in)
+      (when content-in (close-input-port content-in)))
 
     (abstract get-version)
 
