@@ -15,10 +15,6 @@
 Implements an @as-index{HTTP client} with support for both @as-index{http/1.1}
 and @as-index{http/2} protocols.
 
-@bold{Status: } The high-level client interface is unfinished. The http/1.1 and
-http/2 protocol implementations are fairly complete, with some exceptions (see
-@secref["known-issues"]).
-
 @; ------------------------------------------------------------
 
 @include-section["intro.scrbl"]

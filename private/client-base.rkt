@@ -19,7 +19,7 @@
 (define http-client-base<%>
   (interface ()
     [async-request
-     (->m request? (evt/c (-> (is-a?/c http-response<%>))))]
+     (->m request? (evt/c (-> (is-a?/c response<%>))))]
     ))
 
 ;; ------------------------------------------------------------

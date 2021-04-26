@@ -15,7 +15,7 @@
 ;; FIXME/TODO:
 ;; - record headers actually sent, including UA-synthesized (eg, Host)
 
-(define http-response<%>
+(define response<%>
   (interface* () ([prop:about (lambda (self) (send self about))])
     [get-version
      (->m symbol?)]
@@ -44,7 +44,7 @@
 ;; ------------------------------------------------------------
 
 (define http-response%
-  (class* object% (http-response<%> class-printable<%>)
+  (class* object% (response<%> class-printable<%>)
     (init-field request         ;; Request
                 status-code     ;; Nat
                 header          ;; header%

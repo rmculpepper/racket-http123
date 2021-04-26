@@ -23,7 +23,7 @@
 
 ;; ============================================================
 
-(define response/c (is-a?/c http-response<%>))
+(define response/c (is-a?/c response<%>))
 
 (define client/c
   (recursive-contract (is-a?/c http-client<%>)))
@@ -34,12 +34,15 @@
                         (or/c string? bytes?)))))
 (define status-class/c
   (or/c 'informational 'successful 'redirection 'client-error 'server-error))
+(define response-handler/c
+  (-> client/c response/c any))
 (define response-handler-entry/c
   (list/c (or/c (integer-in 100 599) status-class/c)
-          (-> client/c response/c any)))
+          response-handler/c))
+(define content-handler/c
+  (-> input-port? any))
 (define content-handler-entry/c
-  (list/c (or/c symbol?)
-          (-> input-port? any)))
+  (list/c (or/c symbol?) content-handler/c))
 
 (define http-client<%>
   (interface (http-client-base<%>)

@@ -19,13 +19,17 @@
          request-header
          request-data
          ok-http-url?
-         http-client
+         response<%>
          header<%>
          header-key-symbol?
+         http-client
          http-client-base<%>
          http-client<%>
-         http-response<%>
-         current-response)
+         current-response
+
+         status-class/c
+         response-handler/c
+         content-handler/c)
 
 (define (http-client #:add-header [new-header null]
                      #:add-response-handlers [new-response-handlers null]

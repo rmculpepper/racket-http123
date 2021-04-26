@@ -16,62 +16,6 @@
 @title[#:tag "base-api"]{Basic API}
 
 @; ------------------------------------------------------------
-@section[#:tag "client"]{HTTP Client}
-
-An @deftech{HTTP client} offers methods to perform @tech{requests} and
-receive @tech{responses}.
-
-@defproc[(http-client)
-         (is-a?/c http-client<%>)]{
-
-Creates an HTTP client.
-
-The client automatically creates connections as necessary based on
-request URLs. For @tt{https} requests, the client attempts to
-negotiate an http/2 connection using ALPN; if the server does not
-agree to http/2, the client falls back to http/1.1. For @tt{http}
-requests, only http/1.1 is supported.
-
-Connections created by the client are automatically closed after a
-few seconds of inactivity.
-}
-
-@definterface[http-client<%> ()]{
-
-@defmethod[(sync-request [req request?]) (is-a?/c http-response<%>)]{
-
-Sends a @tech{request} and returns the @tech{response}.
-
-Equivalent to
-@racket[((sync (send @#,(this-obj) @#,method[http-client<%> async-request] req)))].
-}
-
-@defmethod[(async-request [req request?]) (evt/c (-> (is-a?/c http-response<%>)))]{
-
-Sends a request and returns a synchronizable event that is ready once
-one of the following occurs:
-@itemlist[
-
-@item{The beginning of a response has been received, including the status and
-header. The synchronization result is a constant function that returns an
-instance of @racket[http-response<%>]; see @method[http-response<%>
-get-content-in] for notes on concurrent processing of the response message
-body.}
-
-@item{The server closed the connection or sent an invalid response
-beginning. The synchronization result is a function that raises an
-exception with information about the failure.}
-
-]
-
-See @secref["evt-result"] for the rationale of the procedure wrapper.
-
-An exception may be raised immediately if a failure occurs while sending the
-request (for example, no connection could be made to the host).
-}
-}
-
-@; ------------------------------------------------------------
 @section[#:tag "request"]{Requests}
 
 @defstruct*[request
@@ -166,16 +110,16 @@ satisfies the following constraints, @racket[#f] otherwise. The constraints are:
 @; ------------------------------------------------------------
 @section[#:tag "response"]{Responses}
 
-@definterface[http-response<%> ()]{
+@definterface[response<%> ()]{
 
 Represents an HTTP @deftech{response} (either http/1.1 or http/2).
 
 The response object is created after successfully receiving the response status
 and header; it does not imply that the response's message body was successfully
 read. The user may receive the response object while reading of the message body
-proceeds concurrently. See @method[http-response<%> get-content-in] and
-@method[http-response<%> get-trailer-evt] for notes on exceptions regarding
-errors in the response occurring after the header.
+proceeds concurrently. See @method[response<%> get-content-in] and
+@method[response<%> get-trailer-evt] for notes on exceptions regarding errors in
+the response occurring after the header.
 
 @defmethod[(get-version) (or/c 'http/1.1 'http/2)]{
 
@@ -251,7 +195,7 @@ trailer exists (for example, if an http/1.1 response did not use chunked
 transfer encoding).
 
 This method blocks until the response has been fully received; see also
-@method[http-response<%> get-trailer-evt]. This method may raise an exception
+@method[response<%> get-trailer-evt]. This method may raise an exception
 reflecting an error reading the response.
 }
 
