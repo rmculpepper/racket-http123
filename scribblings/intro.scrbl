@@ -22,11 +22,11 @@
 Create a client with default header fields and content handlers for
 expected content types:
 @examples[#:eval the-eval #:label #f
-(define client (http-client
-                #:add-header
-                `([x-racket-version ,(version)])
-                #:add-content-handlers
-                `([application/json ,read-json])))
+(define client
+  (http-client #:add-header
+               `([x-racket-version ,(version)])
+               #:add-content-handlers
+               `([application/json ,read-json])))
 ]
 
 Construct a request with a method and URL:

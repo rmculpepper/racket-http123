@@ -34,9 +34,9 @@
    (h
     -
     ()
-    (time u . "05:12:21 PM")
+    (time u . "05:30:26 PM")
     (date u . "04-26-2021")
-    (milliseconds_since_epoch . 1619457141214))))
+    (milliseconds_since_epoch . 1619458226369))))
  #""
  #"")
 ((send client handle (request 'GET "https://tools.ietf.org/rfc/rfc7540.txt"))
@@ -48,7 +48,7 @@
   ()
   (q
    exn
-   "handle: no content handler matched for text/plain content-type\n  code: 'unhandled-response-content\n  response: 200 response\n  received: 'yes"))
+   "handle: no content handler matched\n  code: 'unhandled-content\n  response: 200 response with text/plain body\n  received: 'yes"))
  #""
  #"")
 ((define client2
@@ -135,7 +135,7 @@
    (0
     (u
      .
-     "(new http2-response%\n (status-code 200)\n (header\n  (new header%\n   (table\n    '#hasheq((cache-control . #\"private, max-age=0\")\n             (content-encoding . #\"gzip\")\n             (content-length . #\"6233\")\n             (content-type . #\"text/html; charset=ISO-8859-1\")\n             (date . #\"Mon, 26 Apr 2021 17:12:26 GMT\")\n             (expires . #\"-1\")\n             (p3p\n              .\n              #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n             (server . #\"gws\")\n             (x-frame-options . #\"SAMEORIGIN\")\n             (x-xss-protection . #\"0\")))))\n ...)\n"))))
+     "(new http2-response%\n (status-code 200)\n (header\n  (new header%\n   (table\n    '#hasheq((cache-control . #\"private, max-age=0\")\n             (content-encoding . #\"gzip\")\n             (content-length . #\"6215\")\n             (content-type . #\"text/html; charset=ISO-8859-1\")\n             (date . #\"Mon, 26 Apr 2021 17:30:31 GMT\")\n             (expires . #\"-1\")\n             (p3p\n              .\n              #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n             (server . #\"gws\")\n             (x-frame-options . #\"SAMEORIGIN\")\n             (x-xss-protection . #\"0\")))))\n ...)\n"))))
  #""
  #"")
 ((send resp get-status-code) ((3) 0 () 0 () () (q values 200)) #"" #"")

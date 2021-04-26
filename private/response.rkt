@@ -84,7 +84,9 @@
     (define/public (get-printing-components)
       (values '(status-code header) (list status-code header) #t))
     (define/public (about)
-      (format "~a response" status-code))
+      (format "~a response with ~a body"
+              status-code
+              (if content-in (get-content-type) "no")))
     ))
 
 (define const-false-evt
