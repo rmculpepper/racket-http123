@@ -49,6 +49,8 @@
      (->m header-key-symbol? bytes? boolean?)]
     [value-matches?
      (->*m [header-key-symbol? byte-regexp?] [#:exact? boolean?] boolean?)]
+    [get-content-type
+     (->m (or/c #f symbol?))]
     ))
 
 ;; ----------------------------------------
@@ -114,6 +116,15 @@
 
     (define/public (remove! key)
       (hash-remove! table key))
+
+    ;; ----
+
+    (define/public (get-content-type)
+      (define content-type (or (get-value 'content-type) #""))
+      (match (regexp-match (rx (rx ^ (record TOKEN) "/" (record TOKEN))) content-type)
+        [(list _ type-bs subtype-bs)
+         (string->symbol (format "~a/~a" type-bs subtype-bs))]
+        [_ #f]))
 
     ;; ----
 

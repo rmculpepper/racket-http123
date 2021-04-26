@@ -25,8 +25,42 @@
 
 (define response/c (is-a?/c http-response<%>))
 
+(define client/c
+  (recursive-contract (is-a?/c http-client<%>)))
+(define in-header/c
+  (listof (or/c string?
+                bytes?
+                (list/c (or/c symbol? string? bytes?)
+                        (or/c string? bytes?)))))
+(define status-class/c
+  (or/c 'informational 'successful 'redirection 'client-error 'server-error))
+(define response-handler-entry/c
+  (list/c (or/c (integer-in 100 599) status-class/c)
+          (-> client/c response/c any)))
+(define content-handler-entry/c
+  (list/c (or/c symbol?)
+          (-> input-port? any)))
+
 (define http-client<%>
   (interface (http-client-base<%>)
+    [fork
+     (->*m []
+           [#:set-header (or/c #f in-header/c)
+            #:add-header in-header/c
+            #:set-response-handlers (or/c #f (listof response-handler-entry/c))
+            #:add-response-handlers (listof response-handler-entry/c)
+            #:set-content-handlers (or/c #f (listof content-handler-entry/c))
+            #:add-content-handlers (listof content-handler-entry/c)]
+           any)]
+    [handle
+     (->m request? any)]
+    ;; ----
+    [adjust-request
+     (->m request? request?)]
+    [handle-response
+     (->m response/c any)]
+    [handle-response-content
+     (->m response/c any)]
     [sync-request
      (->m request? response/c)]
     ))
@@ -39,20 +73,27 @@
   (class* object% (http-client<%>)
     (init-field [base (new connection-manager%)]
                 [base-header default-base-header]
-                [response-handlers (hash)]
-                [content-handlers (hash)])
+                [response-handlers null]
+                [content-handlers null])
     (super-new)
 
-    (define/public (fork #:add-header [in-add-header null]
-                         #:add-response-handlers [new-response-handlers (hash)]
-                         #:add-content-handlers [new-content-handlers (hash)])
+    (define/public (fork #:set-header [set-header #f]
+                         #:add-header [in-add-header null]
+                         #:set-response-handlers [set-response-handlers #f]
+                         #:add-response-handlers [new-response-handlers null]
+                         #:set-content-handlers [set-content-handlers #f]
+                         #:add-content-handlers [new-content-handlers null])
       (with-entry-point 'fork
         (define add-header (check-header-field-list in-add-header))
         (new http-client%
              (base base)
-             (base-header (header-field-list-update base-header add-header))
-             (response-handlers (merge-response-handlers response-handlers new-response-handlers))
-             (content-handlers (merge-content-handlers content-handlers new-content-handlers)))))
+             (base-header
+              (let ([base-header (if set-header (check-header-field-list set-header) base-header)])
+                (header-field-list-update base-header add-header)))
+             (response-handlers
+              (append (or set-response-handlers response-handlers) new-response-handlers))
+             (content-handlers
+              (append (or set-content-handlers content-handlers) new-content-handlers)))))
 
     (define/public (adjust-request req)
       (match-define (request method url header data) req)
@@ -65,14 +106,17 @@
 
     (define/public (handle-response resp)
       (define handler
-        (or (hash-ref response-handlers (send resp get-status-code) #f)
-            (hash-ref response-handlers (send resp get-status-class) #f)
-            (hash-ref response-handlers 'else #f)))
+        (cond [(assoc* (list (send resp get-status-code)
+                             (send resp get-status-class)
+                             'else)
+                       response-handlers)
+               => cadr]
+              [else #f]))
       (if handler
           (handler this resp)
-          (default-handler resp)))
+          (default-response-handler resp)))
 
-    (define/public (default-handler resp)
+    (define/public (default-response-handler resp)
       (case (send resp get-status-code)
         [(200) (handle-response-content resp)]
         [else (unhandled-response resp)]))
@@ -85,19 +129,14 @@
                               'response resp)))
 
     (define/public (handle-response-content resp)
-      (define h (send resp get-header))
-      (define content-type (or (send h get-value 'content-type) #""))
-      (match (regexp-match (rx (rx ^ (record TOKEN) "/" (record TOKEN))) content-type)
-        [(list _ type-bs subtype-bs)
-         (define type (string->symbol (format "~a/~a" type-bs subtype-bs)))
-         (define handler
-           (or (hash-ref content-handlers type #f)
-               (hash-ref content-handlers '*/* #f)))
-         (if handler
-             (parameterize ((current-response resp))
-               (handler (send resp get-content-in #t)))
-             (default-content-handler resp type))]
-        [_ (default-content-handler resp #f)]))
+      (define type (or (send resp get-content-type) #f))
+      (define handler
+        (cond [(assoc* (list type '*/*) content-handlers) => cadr]
+              [else #f]))
+      (if handler
+          (parameterize ((current-response resp))
+            (handler (send resp get-content-in #t)))
+          (default-content-handler resp type)))
 
     (define/public (default-content-handler resp type)
       (h-error "no content handler matched for ~a content-type" (or type "unknown")
@@ -124,19 +163,11 @@
 
 ;; FIXME: check hash contents
 
-(define (merge-response-handlers old new)
-  (for/fold ([h new]) ([(k v) (in-hash old)])
-    (if (or (hash-has-key? new k)
-            (hash-has-key? new (status-code->class k))
-            (hash-has-key? new 'else))
-        h
-        (hash-set h k v))))
-
-(define (merge-content-handlers old new)
-  (if (hash-has-key? new '*/*)
-      new
-      (for/fold ([h old]) ([(k v) (in-hash new)])
-        (hash-set h k v))))
+(define (assoc* ks alist)
+  (match alist
+    ['() #f]
+    [(cons (and entry (cons k _)) alist)
+     (if (member k ks) entry (assoc* ks alist))]))
 
 ;; ----------------------------------------
 
@@ -145,6 +176,6 @@
        (define req1 (request 'GET "http://www.neverssl.com/"))
        (define c0 (new http-client%))
        (require racket/port)
-       (define c (send c0 fork #:add-content-handlers (hasheq 'text/html port->string))))
+       (define c (send c0 fork #:add-content-handlers `([text/html ,port->string]))))
 
 ;; FIXME: beware empty paths: (GET "https://www.google.com") fails!
