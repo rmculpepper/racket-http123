@@ -7,6 +7,7 @@
          racket/match
          file/gunzip
          "interfaces.rkt"
+         "request.rkt"
          "io.rkt"
          "header.rkt")
 (provide (all-defined-out))
@@ -15,9 +16,11 @@
 ;; - record headers actually sent, including UA-synthesized (eg, Host)
 
 (define http-response<%>
-  (interface ()
+  (interface* () ([prop:about (lambda (self) (send self about))])
     [get-version
      (->m symbol?)]
+    [get-request
+     (->m (or/c request? #f))]
     [get-status-code
      (->m exact-nonnegative-integer?)]
     [get-status-class
@@ -30,13 +33,16 @@
      (->m (or/c #f (is-a?/c header<%>)))]
     [get-trailer-evt
      (->m (evt/c (-> (or/c #f (is-a?/c header<%>)))))]
+    [about
+     (->m string?)]
     ))
 
 ;; ------------------------------------------------------------
 
 (define http-response%
   (class* object% (http-response<%> class-printable<%>)
-    (init-field status-code     ;; Nat
+    (init-field request         ;; Request
+                status-code     ;; Nat
                 header          ;; header%
                 trailerbxe)     ;; (Evt (-> (or/c #f header%)))
     (init ((init-content content))) ;; #f or Bytes or InputPort
@@ -47,6 +53,7 @@
                              [(input-port? init-content) init-content]
                              [else #f])])
 
+    (define/public (get-request) request)
     (define/public (get-status-code) status-code)
     (define/public (get-status-class)
       (status-code->class status-code))
@@ -68,6 +75,8 @@
       'http-response%)
     (define/public (get-printing-components)
       (values '(status-code header) (list status-code header) #t))
+    (define/public (about)
+      (format "~a response" status-code))
     ))
 
 (define const-false-evt

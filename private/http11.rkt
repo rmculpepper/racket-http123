@@ -301,6 +301,7 @@
             (send header has-value? 'connection #"close")))
       (define (make-resp content trailersbxe)
         (new http11-response%
+             (request req)
              (status-line status-line)
              (status-code (string->number (bytes->string/latin-1 status-code)))
              (header header)

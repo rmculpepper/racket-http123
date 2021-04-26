@@ -434,7 +434,7 @@
            (in-from-user in-from-user)))
     (define/public (make-expect-header-pstate)
       (new expect-header-pstate% (stream this)
-           (resp-bxe resp-bxe) (user-in user-in) (trailerbxe trailerbxe)))
+           (req req) (resp-bxe resp-bxe) (user-in user-in) (trailerbxe trailerbxe)))
     (define/public (make-reading-response-pstate)
       (new reading-response-pstate% (stream this)
            (user-in user-in) (out-to-user out-to-user) (trailerbxe trailerbxe)))
@@ -623,7 +623,7 @@
 
 (define expect-header-pstate%
   (class pstate-base%
-    (init-field resp-bxe user-in trailerbxe)
+    (init-field req resp-bxe user-in trailerbxe)
     (inherit-field stream)
     (inherit change-pstate!)
     (super-new)
@@ -660,6 +660,7 @@
          (define status (send header get-integer-value ':status))
          (send header remove! ':status)
          (new http2-response%
+              (request req)
               (status-code status)
               (header header)
               (content user-in)
