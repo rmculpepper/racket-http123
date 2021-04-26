@@ -188,35 +188,89 @@
 
 ;; ----------------------------------------
 
-;; adapted from db/private/postgresql/connection.rkt
 ;; SSL output ports currently seem to create one SSL record per port write.
 ;; This causes an explosion in the amount of data sent, due to padding, HMAC,
 ;; and other record overhead. So add an ad hoc buffering port around it.
-(define (buffering-output-port out)
-  (define-syntax-rule (DEBUG expr ...) (when #f expr ...))
-  (DEBUG (eprintf "** making buffered output port\n"))
-  (define tmp (open-output-bytes))
+
+;; buffering-output-port : OutputPort Boolean [PosInt] -> OutputPort
+;; The buffer is unlimited. It is flushed in increments of at most MAX-CHUNK.
+;; This wrapper should be thread-safe and break-safe, but it is not kill-safe.
+(define (buffering-output-port out propagate-close?
+                               [max-flush-chunk-length 4096])
+  (define-values (buf-in buf-out) (make-pipe))
+  (define flush-lock (make-semaphore 1))
   (define (write-out buf start end non-block? eb?)
     (cond [(< start end)
-           (write-bytes buf tmp start end)
-           (- end start)]
-          [else ;; flush => non-block = #f (allowed to block)
-           (begin (flush) 0)]))
-  (define (flush)
-    (define buf (get-output-bytes tmp #t))
-    (define end (bytes-length buf))
-    (DEBUG (eprintf "** flushing ~s bytes\n" end))
-    ;; SSL seems to have trouble accepting too much data at once...
-    (define CHUNK (expt 2 22))
-    (for ([start (in-range 0 end CHUNK)])
-      (DEBUG (eprintf "-- flushing range [~s,~s)\n" start (min end (+ start CHUNK))))
-      (write-bytes buf out start (min end (+ start CHUNK)))
-      (flush-output out))
-    (when (zero? end) (flush-output out)))
-  (define (close) (close-output-port out))
-  (define (abandon) (abandon-port out))
+           (cond [non-block?
+                  ;; must not buffer, must not block, eb? = #f
+                  (define (retry _) (write-out buf start end #t #f))
+                  (cond [(zero? (pipe-content-length buf-in))
+                         ;; buffer is empty => write directly to out
+                         (write-direct buf start end)]
+                        [else ;; buffer is non-empty => try to flush first
+                         (cond [(not (semaphore-try-wait? flush-lock))
+                                (handle-evt (semaphore-peek-evt flush-lock) retry)]
+                               [else ;; acquired flush-lock
+                                (if (try-flush-without-block)
+                                    (write-direct buf start end)
+                                    (begin (semaphore-post flush-lock)
+                                           (handle-evt out retry)))])])]
+                 [else ;; can buffer, can block
+                  buf-out])]
+          [else ;; flush => non-block? = #f (allowed to block)
+           (begin (flush eb?) 0)]))
+  (define (write-direct buf start end) ;; non-block? = #t, eb? = #f
+    (or (write-bytes-avail* buf out start end)
+        (handle-evt out (lambda (_) (write-out buf start end #t #f)))))
+  (define (try-flush-without-block) ;; returns #t if flush completed
+    ;; PRE: holding flush-lock, breaks disabled
+    (define buffered (pipe-content-length buf-in))
+    (cond [(zero? buffered)
+           #t]
+          [else
+           (define len (min buffered (or max-flush-chunk-length buffered)))
+           (define progress-evt (port-progress-evt buf-in))
+           (define chunk (peek-bytes len buf-in))
+           (define r (write-bytes-avail* chunk out))
+           (cond [(or (eq? r #f) (zero? r))
+                  #f]
+                 [else
+                  (port-commit-peeked r progress-evt always-evt buf-in)
+                  (try-flush-without-block)])]))
+  (define (flush/can-block eb?) ;; PRE: holding flush-lock
+    (cond [(try-flush-without-block) (void)]
+          [else (begin (if eb? (sync/enable-break out) (sync out)) (flush/can-block eb?))]))
+  (define (flush eb?)
+    (parameterize-break #f
+      (if eb? (semaphore-wait/enable-break flush-lock) (semaphore-wait flush-lock))
+      (flush/can-block eb?)
+      (semaphore-post flush-lock)))
+  (define (close)
+    (flush #t)
+    (when propagate-close? (close-output-port out)))
+  (define (abandon)
+    (flush #t)
+    (when propagate-close? (abandon-port out)))
+  (define (get-write-evt buf start end)
+    (guard-evt
+     (lambda ()
+       (let retry ()
+         (cond [(not (semaphore-try-wait? flush-lock))
+                (replace-evt (semaphore-peek-evt flush-lock)
+                             (lambda (_) (retry)))]
+               [else ;; acquired flush-lock
+                (cond [(parameterize-break #f
+                         (begin0 (try-flush-without-block)
+                           (semaphore-post flush-lock)))
+                       ;; buffer is currently empty
+                       (write-bytes-avail-evt buf out start end)]
+                      [else (replace-evt out (lambda (_) (retry)))])])))))
   (make-output-port* #:name (object-name out)
                      #:evt always-evt
                      #:write-out write-out
+                     #:get-write-evt (and (port-writes-atomic? out)
+                                          get-write-evt)
                      #:close close
-                     #:abandon (and (port-with-abandon? out) abandon)))
+                     #:abandon (and propagate-close?  ;; otherwise, no point in abandon
+                                    (port-with-abandon? out)
+                                    abandon)))
