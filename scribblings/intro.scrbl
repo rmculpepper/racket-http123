@@ -16,8 +16,9 @@
 @; ------------------------------------------------------------
 @title[#:tag "intro"]{Introduction to http123}
 
-
 @section[#:tag "client-intro"]{Introduction to the Client API}
+
+This section introduces the high-level, handlers-based client API.
 
 Create a client with default header fields and content handlers for
 expected content types:
@@ -28,6 +29,7 @@ expected content types:
                #:add-content-handlers
                `([application/json ,read-json])))
 ]
+Header fields can be specified in several different forms.
 
 Construct a request with a method and URL:
 @examples[#:eval the-eval #:label #f
@@ -80,15 +82,17 @@ exception for any other response.
 ]
 
 
-@section[#:tag "base-intro"]{Introduction to the Base API}
+@section[#:tag "base-intro"]{Introduction to the Response API}
+
+This section introduces a lower-level client API that users can use to
+simply retrieve response objects.
 
 Create a client:
 @examples[#:eval the-eval #:label #f
 (define client (http-client))
 ]
 
-Create a @racket[request]. A request combines a method, location, header, and
-optional data. Header fields can be specified in several different forms.
+Create a request:
 @examples[#:eval the-eval #:label #f
 (define header '("Accept-Encoding: gzip, deflate"
                  (accept-language #"en")
@@ -121,6 +125,33 @@ automatically decompressed.
 Once read, content data is gone forever!
 @examples[#:eval the-eval #:label #f
 (read-string 5 (send resp get-content-in))
+]
+
+Using @method[http-client<%> async-request] it is possible to submit
+send requests and receive responses as they arrive. In particular, in
+http/2 connections responses may arrive in an order different from the
+order the requests were sent. Of course, responses using different
+connections are always unordered.
+
+The event returned by @method[http-client<%> async-request] produces a
+thunk as its synchronization result; apply the thunk to get the
+response or to raise an exception if there was an error getting the
+response. (See @secref["evt-result"] for rationale.)
+@examples[#:eval the-eval #:label #f
+(define ietf-evt
+  (send client async-request
+        (request 'GET "https://tools.ietf.org/rfc/rfc7540.txt")))
+(define google-evt
+  (send client async-request
+        (request 'GET "https://www.google.com/")))
+(eval:alts
+ ((sync ietf-evt google-evt))
+ (let ([resp ((sync ietf-evt google-evt))])
+   (define h (send resp get-header))
+   (send h remove! 'alt-svc)
+   (send h remove! 'set-cookie)
+   (pretty (call-with-output-string
+            (lambda (out) (pretty-print resp out))))))
 ]
 
 @; ------------------------------------------------------------

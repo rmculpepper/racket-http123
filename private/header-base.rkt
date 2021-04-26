@@ -3,6 +3,7 @@
 
 #lang racket/base
 (require racket/match
+         racket/contract/base
          racket/list
          racket/symbol
          "interfaces.rkt"
@@ -49,6 +50,12 @@
 ;; HeaderField = (list HeaderFieldKey HeaderFieldValue)
 ;; HeaderFieldKey = ImmutableBytes              -- matching lower-TOKEN
 ;; HeaderFieldValue = ImmutableBytes            -- matching FIELD-VALUE
+
+(define (header-field-key/c v)
+  (and (bytes? v) (immutable? v) (regexp-match? (rx lower-TOKEN) v)))
+(define (header-field-value/c v)
+  (and (bytes? v) (immutable? v) (regexp-match? (rx FIELD-VALUE) v)))
+(define header-field/c (list/c header-field-key/c header-field-value/c))
 
 ;; check-header-field-list : InHeaderFieldList -> HeaderFieldList
 (define (check-header-field-list hs)

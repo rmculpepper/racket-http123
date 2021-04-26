@@ -29,12 +29,10 @@
 
 (define header<%>
   (interface ()
-    [get-table
-     (->m (hash/c header-key-symbol? (or/c bytes? (listof bytes?))))]
-    [get-header-entries
-     (->*m [] [boolean?] (listof (list/c bytes? bytes?)))]
+    [get-header-field-list
+     (->m (listof header-field/c))]
     [get-header-lines
-     (->*m [] [boolean?] (listof bytes?))]
+     (->m (listof bytes?))]
     [has-key?
      (->m header-key-symbol? boolean?)]
     [get-values
@@ -57,21 +55,29 @@
 
 (define header%
   (class* object% (header<%> class-printable<%>)
-    (init-field [table (make-hasheq)]) ;; Hasheq[Symbol => (U Bytes (Listof Bytes))]
+    (init-field header-fields)  ;; HeaderFieldList, except temp. allow #":status"
     (super-new)
 
-    (define/public (get-table) table)
-    (define/public (copy-table) (hash-copy table))
+    (field [table (make-hasheq)])   ;; Hasheq[Symbol => (U Bytes (Listof Bytes))]
+    (let ([list-valued (make-hasheq)])
+      (for ([hfield (in-list header-fields)])
+        (match-define (list key-bs val-bs) hfield)
+        (define key (header-key->symbol key-bs #t))
+        (cond [(hash-ref table key #f)
+               => (lambda (old-v)
+                    (define old-v* (if (bytes? old-v) (list old-v) old-v))
+                    (define new-v (cons val-bs old-v*))
+                    (hash-set! table key new-v)
+                    (hash-set! list-valued key #t))]
+              [else (hash-set! table key val-bs)]))
+      (for ([k (in-hash-keys list-valued)])
+        (hash-set! table k (reverse (hash-ref table k)))))
 
-    (define/public (get-header-entries [combine? #f])
-      (for*/list ([(k vs) (in-hash table)]
-                  [v (in-list (if (list? vs)
-                                  (if combine? (list (bytes-join vs #", ")) vs)
-                                  (list vs)))])
-        (list (header-key->bytes k) v)))
+    (define/public (get-header-field-list)
+      header-fields)
 
-    (define/public (get-header-lines [combine? #f])
-      (for/list ([p (in-list (get-header-entries combine?))])
+    (define/public (get-header-lines)
+      (for/list ([p (in-list (get-header-field-list))])
         (match-define (list k v) p)
         (bytes-append k #": " v)))
 
@@ -115,7 +121,9 @@
                  #:info (hasheq 'code 'bad-header-field-value))))
 
     (define/public (remove! key)
-      (hash-remove! table key))
+      (hash-remove! table key)
+      (define key-bs (string->bytes/utf-8 (symbol->string key)))
+      (set! header-fields (filter (lambda (e) (not (equal? (car e) key-bs))) header-fields)))
 
     ;; ----
 
@@ -131,32 +139,15 @@
     (define/public (get-printing-classname)
       'header%)
     (define/public (get-printing-components)
-      (values '(table) (list table) #f))
+      (values '(header-fields) (list header-fields) #f))
     ))
 
 ;; ----------------------------------------
 
-;; make-header-from-list : (Listof X) (X -> (values HeaderKey HeaderValueBytes))
+;; make-header-from-list : (Listof X) (X -> (list HeaderKey HeaderValueBytes))
 ;;                      -> header%
 (define (make-header-from-list raw-header get-kv)
-  (define table (make-hasheq))
-  (define list-valued (make-hasheq))
-  (for ([raw-field (in-list raw-header)])
-    (define-values (key-bs val-bs) (get-kv raw-field))
-    (define key (or (header-key->symbol key-bs #t)
-                    (h-error "bad header field key\n  key: ~e" key-bs
-                             #:info (hasheq 'who 'make-headers-from-list
-                                            'code 'bad-header-field-key))))
-    (cond [(hash-ref table key #f)
-           => (lambda (old-v)
-                (define old-v* (if (bytes? old-v) (list old-v) old-v))
-                (define new-v (cons val-bs old-v*))
-                (hash-set! table key new-v)
-                (hash-set! list-valued key #t))]
-          [else (hash-set! table key val-bs)]))
-  (for ([k (in-hash-keys list-valued)])
-    (hash-set! table k (reverse (hash-ref table k))))
-  (new header% (table table)))
+  (new header% (header-fields (map get-kv raw-header))))
 
 ;; make-header-from-lines : (Listof Bytes) -> headers%
 (define (make-header-from-lines raw-header)
@@ -164,7 +155,9 @@
    raw-header
    (lambda (line)
      (match (regexp-match (rx^$ HEADER-FIELD) line)
-       [(list _ key-bs val-bs) (values key-bs val-bs)]
+       [(list _ key-bs val-bs)
+        (list (check-header-field-key key-bs)
+              (check-header-field-value val-bs))]
        [_ (h-error "malformed header field line\n  line: ~e" line
                    #:info (hasheq 'who 'make-header-from-lines
                                   'code 'bad-header-field-line))]))))
@@ -175,6 +168,7 @@
 ;; A HeaderEntry is (list Bytes Bytes) | (list Bytes Bytes 'never-add)
 
 ;; make-header-from-entries : (Listof HeaderEntry) -> header%
+;; Allow special #":status" pseudo-header key.
 ;; FIXME: preserve 'never-add ??
 (define (make-header-from-entries entries)
   (make-header-from-list entries check-header-entry))
@@ -182,8 +176,11 @@
 ;; check-header-entry : Any -> (values HeaderKeyBytes HeaderValueBytes)
 (define (check-header-entry entry)
   (match entry
-    [(list* (? bytes? (and (or (regexp (rx^$ lower-TOKEN)) #":status") key))
+    [(list* #":status" (? bytes? (and (regexp #rx#"^[0-9][0-9][0-9]$") value)) _)
+     (list #":status" (bytes->immutable-bytes value))]
+    [(list* (? bytes? (and (regexp (rx^$ lower-TOKEN)) key))
             (? bytes? (and (regexp (rx^$ FIELD-VALUE)) value))
             (? (lambda (v) (member v '((never-add) ())))))
-     (values key value)]
+     (list (bytes->immutable-bytes key)
+           (bytes->immutable-bytes value))]
     [h (h-error "malformed header field entry\n  entry: ~e" h)]))
