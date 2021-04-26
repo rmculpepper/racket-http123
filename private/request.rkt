@@ -2,12 +2,14 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 #lang racket/base
-(require racket/match
+(require (for-syntax racket/base syntax/transformer)
+         racket/match
          net/url-structs
          "interfaces.rkt"
          "header-base.rkt"
          "util.rkt")
-(provide (all-defined-out))
+(provide (except-out (all-defined-out) request)
+         (rename-out [request* request]))
 
 ;; A Request is:
 (struct request
@@ -34,12 +36,26 @@
                          #:info (hasheq 'code 'reserved-request-header-field))))
             (unless (or (eq? #f data) (bytes? data) (procedure? data))
               (raise-argument-error 'request "(or/c #f bytes? procedure?)" data))
+            (when (and data (memq 'forbid-request-body (hash-ref known-methods method)))
+              (h-error "data forbidden for given method\n  method: ~e\n  data: ~e" method data
+                       #:info (hasheq 'code 'request-method-forbids-data)))
             (values method u hs data))
   #:transparent
   #:property prop:about
   (lambda (self)
     (match-define (request method (url scheme _ host port _ _ _ _) _ _) self)
     (format "~a ~a://~a~a~a/..." method scheme host (if port ":" "") (or port ""))))
+
+(define (make-request method url [header null] [data #f])
+  (with-entry-point 'request
+    (request method url header data)))
+
+(define-match-expander request*
+  (lambda (stx)
+    (syntax-case stx ()
+      [(_ method-p url-p header-p data-p)
+       (syntax/loc stx (request method-p url-p header-p data-p))]))
+  (make-variable-like-transformer #'make-request))
 
 ;; request:can-replay? : Request -> Boolean
 ;; Can the request be replayed in a different actual connection?  Only care
