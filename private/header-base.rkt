@@ -105,6 +105,14 @@
   (match-define (list key val) hfield)
   (bytes-append key #": " val))
 
+;; header-field-list-update : HeaderFieldList HeaderFieldList -> HeaderFieldList
+;; Remove all fields of hfs with keys present in new-hfs, then append new-hfs.
+(define (header-field-list-update hfs new-hfs)
+  (if (null? new-hfs)
+      hfs
+      (append (filter (lambda (hf) (not (assoc (car hf) new-hfs))) hfs)
+              new-hfs)))
+
 
 ;; ============================================================
 ;; Header key forms
