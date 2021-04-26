@@ -158,17 +158,14 @@
         (fprintf out "~a\r\n" (header-field->line hfield)))
       (fprintf out "\r\n")
       (cond [(procedure? data)
-             (let ([out out])
+             (let ([chunk-out (chunking-output-port out)])
                ;; FIXME: If data throws exception, then close port and bail out.
-               (call-with-continuation-barrier
-                (lambda ()
-                  (data (λ (bs)
-                          (when out
-                            (define len (bytes-length bs))
-                            (unless (zero? len)
-                              (fprintf out "~x\r\n~a\r\n" len bs))
-                            (void))))
-                  (set! out #f))))
+               (dynamic-wind
+                 void
+                 (lambda ()
+                   (call-with-continuation-barrier
+                    (lambda () (data chunk-out))))
+                 (lambda () (close-output-port chunk-out))))
              (fprintf out "0\r\n\r\n")]
             [(bytes? data)
              (write-bytes data out)]
@@ -437,3 +434,61 @@
   (make-pump forward/chunked trailerbxe))
 
 ;; ------------------------------------------------------------
+
+;; chunking-output-port : OutputPort Boolean [PosInt] -> OutputPort
+;; Note: does not send the final "0\r\n".
+(define (chunking-output-port out [max-flush-chunk-length 4096])
+  (define-values (buf-in buf-out) (make-pipe))
+  (define chunk #f)
+  (define chunk-sent 0)
+  (define flush-lock (make-semaphore 1))
+  (define (write-out buf start end non-block? eb?)
+    (cond [(< start end)
+           (cond [non-block?
+                  ;; This port can't honor the "must not buffer" part of the
+                  ;; output-port interface; it doesn't make much sense in this
+                  ;; case. Instead, write to buffer and then (maybe) try to flush.
+                  (write-bytes buf buf-out start end)
+                  (when #f ;; FIXME: does flushing here even make sense?
+                    (when (semaphore-try-wait? flush-lock)
+                      (try-flush-without-block)
+                      (semaphore-post flush-lock)))
+                  (- end start)]
+                 [else buf-out])]
+          [else ;; flush => non-block? = #f (allowed to block)
+           (begin (flush eb?) 0)]))
+  (define (try-flush-without-block) ;; returns #t if flush completed
+    ;; PRE: holding flush-lock, breaks disabled
+    (cond [chunk
+           (define r (write-bytes-avail* chunk out chunk-sent))
+           (cond [(or (eq? r #f) (zero? r))
+                  #f]
+                 [(< (+ chunk-sent r) (bytes-length chunk))
+                  (set! chunk-sent (+ chunk-sent r))
+                  (try-flush-without-block)]
+                 [else
+                  (set! chunk #f)
+                  (try-flush-without-block)])]
+          [(positive? (pipe-content-length buf-in))
+           (define buffered (pipe-content-length buf-in))
+           (define len (min buffered (or max-flush-chunk-length buffered)))
+           (let ([chunk-data (read-bytes len buf-in)])
+             (define enc-len (string->bytes/utf-8 (format "~X" len)))
+             (set! chunk (bytes-append enc-len #"\r\n" chunk-data #"\r\n"))
+             (set! chunk-sent 0))
+           (try-flush-without-block)]
+          [else #t]))
+  (define (flush/can-block eb?) ;; PRE: holding flush-lock
+    (cond [(try-flush-without-block) (void)]
+          [else (begin (if eb? (sync/enable-break out) (sync out)) (flush/can-block))]))
+  (define (flush eb?)
+    (parameterize-break #f
+      (if eb? (semaphore-wait/enable-break flush-lock) (semaphore-wait flush-lock))
+      (flush/can-block eb?)
+      (semaphore-post flush-lock)))
+  (define (close)
+    (flush #t))
+  (make-output-port* #:name (object-name out)
+                     #:evt always-evt
+                     #:write-out write-out
+                     #:close close))
