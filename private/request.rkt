@@ -14,7 +14,7 @@
   (method       ;; Symbol, like 'GET
    url          ;; URL
    header       ;; HeaderFieldList
-   data         ;; (U #f Bytes ((Bytes -> Void) -> Void))
+   data         ;; (U #f Bytes (OutputPort -> Void))
    )
   #:guard (lambda (method loc header data _)
             (unless (memq method known-method-names)
