@@ -146,12 +146,22 @@
              (write-bytes data user-out)
              (close-output-port user-out)]
             [else
+             (define user-out* (proxy-output-port user-out))
              (with-handler (lambda (e)
+                             ;; Leave user-out open, so we don't treat the
+                             ;; request as complete.
                              (send conn register-user-abort-request this e))
-               (call-with-continuation-barrier
-                (lambda ()
-                  (data (lambda (data-bs) (void (write-bytes data-bs user-out))))
-                  (close-output-port user-out))))]))
+               (dynamic-wind
+                 void
+                 (lambda ()
+                   (call-with-continuation-barrier
+                    (lambda ()
+                      (data user-out*)
+                      ;; On normal return, close real user-out to signal complete.
+                      (close-output-port user-out))))
+                 (lambda ()
+                   ;; Close proxy, so user can't cause mischief after return/escape.
+                   (close-output-port user-out*))))]))
 
     ;; ------------------------------------------------------------
     ;; State machine
@@ -445,6 +455,17 @@
                              #:base-info (send stream get-info-for-exn)
                              #:info (hasheq 'wrapped-exn e)))
      (make-header-from-entries header-entries))))
+
+;; ----------------------------------------
+
+(define (proxy-output-port out)
+  (make-output-port* #:name (object-name out)
+                     #:evt out
+                     #:write-out out
+                     #:close void
+                     #:get-write-evt (and (port-writes-atomic? out)
+                                          (lambda (buf start end)
+                                            (write-bytes-avail-evt buf out start end)))))
 
 
 ;; ============================================================
