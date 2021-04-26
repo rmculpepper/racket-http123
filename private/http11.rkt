@@ -141,11 +141,6 @@
         ;; it must be the same as the authority component of the target URI
         ;; (minus userinfo).
         (fprintf out "host: ~a\r\n" (url->host-string u))
-        ;; FIXME: belongs to another layer...
-        (when (header-field-list-missing? hfields #"user-agent")
-          (fprintf out "user-agent: ~a\r\n" default-user-agent))
-        (when (header-field-list-missing? hfields #"accept-encoding")
-          (fprintf out "accept-encoding: ~a\r\n" default-accept-encoding))
         (cond [(procedure? data)
                (fprintf out "transfer-encoding: chunked\r\n")]
               [(bytes? data)

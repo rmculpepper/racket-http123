@@ -11,10 +11,6 @@
 (define-logger http1)
 (define-logger http2)
 
-(define default-user-agent "racket-http123/1.0")
-
-(define default-accept-encoding #"gzip, deflate")
-
 ;; ============================================================
 ;; Who
 

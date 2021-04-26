@@ -8,6 +8,7 @@
          "private/request.rkt"
          "private/header.rkt"
          "private/response.rkt"
+         "private/client-base.rkt"
          "private/client.rkt"
          "private/util.rkt")
 (provide (struct-out exn:fail:http123)
@@ -20,5 +21,6 @@
          http-client<%>
          http-response<%>)
 
-(define (http-client)
-  (new http-client%))
+(define (http-client #:add-header [add-header null])
+  (define c (new http-client%))
+  (send c fork #:add-header add-header))
