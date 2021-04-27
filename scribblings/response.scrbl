@@ -7,17 +7,8 @@
                      net/url-structs net/url-string
                      http123))
 
-@(begin
-  (define-runtime-path log-file "log-base-api.rktd")
-  (define the-eval (make-log-based-eval log-file 'record))
-  (the-eval '(require http123 racket/class racket/port racket/pretty
-                      (submod http123/scribblings/util pretty))))
-
-@title[#:tag "base-api"]{Basic API}
-
-
 @; ------------------------------------------------------------
-@section[#:tag "response"]{Responses}
+@title[#:tag "response"]{Responses}
 
 @definterface[response<%> ()]{
 
@@ -117,7 +108,3 @@ an exception if there was an error reading the response. See also
 @secref["evt-result"].
 }
 }
-
-
-@; ------------------------------------------------------------
-@(close-eval the-eval)
