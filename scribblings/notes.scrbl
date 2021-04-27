@@ -32,6 +32,8 @@ initial @tt{SETTINGS} frame at connection startup disables the feature.}
 
 @item{various limits on protocol elements, with reasonable defaults}
 
+@item{automatic cookie handling}
+
 ]
 
 There are various things that should be configurable that currently are not. A
