@@ -35,11 +35,7 @@ Returns the response's @rfc7231["section-6"]{status code}.
 Note: this library currently discards all Informational (1xx) responses.
 }
 
-@defmethod[(get-status-class) (or/c 'informational
-                                    'successful
-                                    'redirection
-                                    'client-error
-                                    'server-error)]{
+@defmethod[(get-status-class) status-class/c]{
 
 Returns a symbol describing the @rfc7231["section-6"]{status class} of the
 response's status code.
@@ -107,4 +103,10 @@ trailer if there was one, returns @racket[#f] if there was no trailer, or raises
 an exception if there was an error reading the response. See also
 @secref["evt-result"].
 }
+}
+
+@defthing[status-class/c contract?
+          #:value (or/c 'informational 'successful 'redirection 'client-error 'server-error)]{
+
+Contract for symbols representing a response's @rfc7231["section-6"]{status class}.
 }

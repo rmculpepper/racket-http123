@@ -19,20 +19,24 @@ the error. The following are some common keys in @racket[info]; the presence or
 absence of any of these keys depends on the specific error.
 @itemlist[
 
-@item{@racket['version] --- either @racket['http/1.1] or @racket['http/2]}
-
 @item{@racket['code] --- a symbol indicating what kind of error occurred, in a
 form more suitable for comparison than parsing the error message}
 
+@item{@racket['version] --- either @racket['http/1.1] or @racket['http/2], only
+present for protocol-dependent errors}
+
 @item{@racket['http2-error] --- a symbol indicating an http/2
 @h2rfc["section-7"]{error code} (eg, @racket['PROTOCOL_ERROR]) or
-@racket['unknown] if the error code is unfamiliar}
-
-@item{@racket['request] --- the @racket[request] that the error is related to}
+@racket['unknown] if the error code is unfamiliar, only present when using
+http/2}
 
 @item{@racket['received] --- one of @racket['yes], @racket['no], or
 @racket['unknown], indicating whether the request was received and processed by
 the server}
+
+@item{@racket['request] --- the @tech{request} that the error is related to}
+
+@item{@racket['response] --- the @tech{response} that the error is related to}
 
 @item{@racket['wrapped-exn] --- contains a more specific exception that
 represents the immediate source of the error}
