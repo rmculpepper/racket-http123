@@ -3,9 +3,7 @@
           racket/list
           racket/runtime-path
           "util.rkt"
-          (for-label racket/base racket/contract racket/class
-                     net/url-structs net/url-string
-                     http123))
+          (for-label racket/base racket/contract racket/class net/url http123))
 
 @(begin
   (define-runtime-path log-file "log-request.rktd")

@@ -1,11 +1,4 @@
 #lang scribble/manual
-@(require scribble/example
-          racket/list
-          racket/runtime-path
-          "util.rkt"
-          (for-label racket/base racket/contract racket/class
-                     net/url-structs net/url-string
-                     http123))
 
 @title{http123: HTTP Client}
 @author[@author+email["Ryan Culpepper" "ryanc@racket-lang.org"]]

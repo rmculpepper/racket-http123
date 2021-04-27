@@ -1,11 +1,7 @@
 #lang scribble/manual
-@(require scribble/example
-          racket/list
-          racket/runtime-path
-          "util.rkt"
+@(require "util.rkt"
           (for-label racket/base racket/contract racket/class
-                     net/url-structs net/url-string
-                     http123))
+                     net/url http123))
 
 @title[#:tag "notes"]{Notes}
 
