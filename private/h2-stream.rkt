@@ -541,7 +541,6 @@
         (change-pstate! (send stream make-done-pstate))))
 
     (define/public (handle-eof)
-      (log-http2-debug "~a handling EOF" (send stream get-ID))
       (send-exn-to-user
        (build-exn "connection closed by server (EOF)"
                   (hash-set* (get-info-for-exn)

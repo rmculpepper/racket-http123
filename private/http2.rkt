@@ -176,10 +176,8 @@
         ['EOF
          (set-closed! 'EOF)
          (close-ports)
-         (log-http2-debug "~a handling EOF" ID)
          (for ([(streamid stream) (in-hash stream-table)])
-           (send stream handle-eof))
-         (log-http2-debug "~a done handling EOF" ID)]
+           (send stream handle-eof))]
         [(? procedure?) (v)]))
 
     (define in-continue-frames null) ;; (Listof Frame), reversed
@@ -370,10 +368,8 @@
 
     (define/private (closed-timeout)
       ;; PRE: is-closed?
-      (log-http2-debug "~a ** closed-timeout" ID)
       (close-ports)
       (for ([(streamid stream) (in-hash stream-table)])
-        (log-http2-debug "~a ** sending #~s handle-timeout" ID streamid)
         (send stream handle-timeout)))
 
     ;; ============================================================
@@ -394,16 +390,10 @@
         (handle-evt (thread-receive-evt)
                     (lambda (tre)
                       (define fr (thread-receive))
-                      #;(log-http2-debug "~a manager <== ~e" ID fr)
                       (handle-frame-or-other fr))))
       (define manager-bored-evt
         (wrap-evt (if #f (sleep-evt 1) never-evt)
-                  (lambda (ignored)
-                    (log-http2-debug "~a manager is bored!" ID)
-                    (define rt-cms (continuation-marks reader-thread))
-                    (log-http2-debug "~a READER CONTEXT:\n~v\n\n" ID
-                                     (continuation-mark-set->context rt-cms))
-                    (void))))
+                  (lambda (ignored) (log-http2-debug "~a manager is bored!" ID))))
       (define recv-timeout-evt
         (handle-evt (guard-evt (lambda () (get-recv-timeout-alarm-evt)))
                     (lambda (ignored) (recv-timeout))))
@@ -419,7 +409,7 @@
         (define streams-evt (apply choice-evt work-evts))
         (loop streams-evt))
       (define (loop streams-evt)
-        (log-http2-debug "~a manager loop ~s" ID (current-inexact-milliseconds))
+        #;(log-http2-debug "~a manager loop ~s" ID (current-inexact-milliseconds))
         (with-handlers ([(lambda (e) (eq? e 'escape-without-error)) void]
                         [(lambda (e) (eq? e 'stream-error)) void])
           (sync streams-evt
