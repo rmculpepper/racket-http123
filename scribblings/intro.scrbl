@@ -11,12 +11,12 @@
   (define-runtime-path log-file "log-intro.rktd")
   (define the-eval (make-log-based-eval log-file 'replay))
   (the-eval '(require http123 racket/class racket/port racket/pretty json
-                      (submod http123/private/util pretty))))
+                      (submod http123/scribblings/util pretty))))
 
 @; ------------------------------------------------------------
 @title[#:tag "intro"]{Introduction to http123}
 
-@section[#:tag "client-intro"]{Introduction to the Client API}
+@section[#:tag "client-intro"]{Using the Client API}
 
 This section introduces the high-level, handlers-based client API.
 
@@ -83,7 +83,7 @@ added for individual status codes or status classes:
 ]
 
 
-@section[#:tag "base-intro"]{Introduction to the Response API}
+@section[#:tag "base-intro"]{Using the Response API}
 
 This section introduces a lower-level client API that users can use to
 simply retrieve response objects.

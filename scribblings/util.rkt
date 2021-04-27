@@ -13,3 +13,18 @@
 
 (define (hpackrfc fragment . content)
   (apply hyperlink (format "https://tools.ietf.org/html/rfc7541#~a" fragment) content))
+
+
+;; ----------------------------------------
+
+(module pretty racket/base
+  (require racket/serialize racket/port racket/pretty)
+  (serializable-struct pretty (s)
+    #:property prop:custom-write
+    (lambda (self out mode) (write-string (pretty-s self) out)))
+  (define-syntax-rule (P expr)
+    (pretty (call-with-output-string
+             (lambda (out)
+               (parameterize ((pretty-print-columns 80))
+                 (pretty-print expr out))))))
+  (provide (all-defined-out)))

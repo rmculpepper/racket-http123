@@ -6,6 +6,7 @@
          racket/contract/base
          "private/interfaces.rkt"
          "private/request.rkt"
+         "private/header-base.rkt"
          "private/header.rkt"
          "private/response.rkt"
          "private/client-base.rkt"
@@ -27,6 +28,8 @@
          http-client<%>
          current-response
 
+         in-header-field/c
+         header-field/c
          status-class/c
          response-handler/c
          content-handler/c)

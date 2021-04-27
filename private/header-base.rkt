@@ -46,6 +46,9 @@
 ;; InHeaderFieldKey = Symbol | Bytes | String   -- matching TOKEN
 ;; InHeaderFieldValue = String | Bytes          -- matching OWS FIELD-VALUE OWS
 
+(define in-header-field/c
+  (or/c string? bytes? (list/c (or/c symbol? string? symbol?) (or/c string? bytes?))))
+
 ;; HeaderFieldList = (Listof NormalHeaderField)
 ;; HeaderField = (list HeaderFieldKey HeaderFieldValue)
 ;; HeaderFieldKey = ImmutableBytes              -- matching lower-TOKEN
