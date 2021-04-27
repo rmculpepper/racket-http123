@@ -97,6 +97,10 @@
         (set! is-closed? reason)
         (set! closed-ms (current-inexact-milliseconds))))
 
+    (define/private (close-ports)
+      (close-input-port in)
+      (close-output-port out))
+
     ;; ----------------------------------------
 
     (define/public (queue-frame fr)
@@ -107,7 +111,9 @@
       (write-frame out fr))
     (define/public (queue-frames frs)
       (for ([fr (in-list frs)]) (queue-frame fr)))
-    (define/public (flush-frames) (flush-output out))
+    (define/public (flush-frames)
+      (unless (port-closed? out)
+        (flush-output out)))
 
     (define/public (connection-error errorcode [comment #f] #:debug [debug #""])
       (log-http2-debug "~a connection-error ~s, ~s" ID errorcode comment)
@@ -167,10 +173,11 @@
          (after-handle-frame)]
         ['EOF
          (set-closed! 'EOF)
-         (close-input-port in)
-         (close-output-port out)
+         (close-ports)
+         (log-http2-debug "~a handling EOF" ID)
          (for ([(streamid stream) (in-hash stream-table)])
-           (send stream handle-eof))]
+           (send stream handle-eof))
+         (log-http2-debug "~a done handling EOF" ID)]
         [(? procedure?) (v)]))
 
     (define in-continue-frames null) ;; (Listof Frame), reversed
@@ -355,13 +362,14 @@
         (send-goaway)))
 
     (define/private (get-closed-timeout-alarm-evt)
-      (if closed-ms (alarm-evt (+ closed-ms CLOSED-TIMEOUT-MS)) never-evt))
+      (cond [(and closed-ms (not (port-closed? out)))
+             (alarm-evt (+ closed-ms CLOSED-TIMEOUT-MS))]
+            [else never-evt]))
 
     (define/private (closed-timeout)
       ;; PRE: is-closed?
       (log-http2-debug "~a ** closed-timeout" ID)
-      (close-input-port in)
-      (close-output-port out)
+      (close-ports)
       (for ([(streamid stream) (in-hash stream-table)])
         (log-http2-debug "~a ** sending #~s handle-timeout" ID streamid)
         (send stream handle-timeout)))
@@ -387,8 +395,13 @@
                       #;(log-http2-debug "~a manager <== ~e" ID fr)
                       (handle-frame-or-other fr))))
       (define manager-bored-evt
-        (wrap-evt (if #f (sleep-evt 5) never-evt)
-                  (lambda (ignored) (log-http2-debug "~a manager is bored!" ID))))
+        (wrap-evt (if #f (sleep-evt 1) never-evt)
+                  (lambda (ignored)
+                    (log-http2-debug "~a manager is bored!" ID)
+                    (define rt-cms (continuation-marks reader-thread))
+                    (log-http2-debug "~a READER CONTEXT:\n~v\n\n" ID
+                                     (continuation-mark-set->context rt-cms))
+                    (void))))
       (define recv-timeout-evt
         (handle-evt (guard-evt (lambda () (get-recv-timeout-alarm-evt)))
                     (lambda (ignored) (recv-timeout))))
@@ -404,6 +417,7 @@
         (define streams-evt (apply choice-evt work-evts))
         (loop streams-evt))
       (define (loop streams-evt)
+        (log-http2-debug "~a manager loop ~s" ID (current-inexact-milliseconds))
         (with-handlers ([(lambda (e) (eq? e 'escape-without-error)) void]
                         [(lambda (e) (eq? e 'stream-error)) void])
           (sync streams-evt
@@ -412,10 +426,11 @@
                 closed-timeout-evt
                 manager-bored-evt))
         (flush-frames)
-        #;(log-http2-debug "~a flushed" ID)
-        (if (begin0 streams-changed? (set! streams-changed? #f))
-            (loop/streams-changed)
-            (loop streams-evt)))
+        (cond [(port-closed? out)
+               (log-http2-debug "~a manager stopped; closed" ID)]
+              [(begin0 streams-changed? (set! streams-changed? #f))
+               (loop/streams-changed)]
+              [else (loop streams-evt)]))
       ;; ----
       (with-handlers ([(lambda (e) (eq? e 'connection-error))
                        (lambda (e)
@@ -426,17 +441,62 @@
                          (when exn? ((error-display-handler) (exn-message e) e)))])
         (loop/streams-changed)))
 
+    #;
     (define/private (reader)
       ;; Want to wait for input or EOF or closed. Should work to use (sync in),
       ;; but that seems to fail to wake up sometimes. So workaround: use
       ;; peek-byte and catch exn if port closed.
-      (with-handlers ([exn:fail? void]) (peek-byte in))
-      ;; (sync in) ;; wait for input or EOF or closed
+      (let loop ([n 0])
+        (if (sync/timeout 1 in)
+            (unless (zero? n) (log-http2-debug "~a in ready after ~s tries" ID n))
+            (loop (add1 n))))
+      (cond [(port-closed? in)
+             (log-http2-debug "~a <-- closed" ID)
+             (thread-send manager-thread 'EOF) ;; treat like EOF
+             (void)]
+            [(eof-object? (peek-byte in))
+             (log-http2-debug "~a <-- EOF" ID)
+             (thread-send manager-thread 'EOF)
+             (void)]
+            [else
+             (define fr (read-frame br))
+             ;; FIXME: handle reading errors...
+             (log-http2-debug "~a <-- ~a" ID
+                              (parameterize ((error-print-width 60))
+                                (format "~e" fr)))
+             (set! last-recv-ms (current-inexact-milliseconds))
+             (thread-send manager-thread fr)
+             (reader)]))
+
+    #;
+    (define/private (reader)
+      (define fr/eof (*read-frame/eof in br))
+      (cond [(eof-object? fr/eof)
+             (log-http2-debug "~a <-- EOF" ID)
+             (thread-send manager-thread 'EOF)
+             (void)]
+            [else
+             (log-http2-debug "~a <-- ~a" ID
+                              (parameterize ((error-print-width 40))
+                                (format "~e" fr/eof)))
+             (set! last-recv-ms (current-inexact-milliseconds))
+             (thread-send manager-thread fr/eof)
+             (reader)]))
+
+    (define/private (reader)
+      ;; Want to wait for input or EOF or closed. Should work to use (sync in),
+      ;; but that seems to fail to wake up sometimes. So workaround: use
+      ;; peek-byte and catch exn if port closed.
+      ;;(with-handlers ([exn:fail? void]) (peek-byte in))
+      (sync (port-closed-evt in) in) ;; wait for input or EOF or closed
       (cond [(port-closed? in)
              (log-http2-debug "~a <-- closed" ID)
              (thread-send manager-thread 'EOF void) ;; treat like EOF
              (void)]
-            [(eof-object? (peek-byte in))
+            [(with-handlers (#;[exn:fail? (lambda (e) #t)])
+               ;; Somehow, the port-closed? guard above doesn't prevent frequent
+               ;; "peek-byte: input port is closed" errors. So just catch them.
+               (eof-object? (peek-byte in)))
              (log-http2-debug "~a <-- EOF" ID)
              (thread-send manager-thread 'EOF void)
              (void)]

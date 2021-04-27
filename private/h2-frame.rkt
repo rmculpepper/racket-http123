@@ -106,6 +106,20 @@
 
 ;; ----------------------------------------
 
+(define (*read-frame/eof in br)
+  (define buf (read-bytes 9 in))
+  (cond [(eof-object? buf)
+         eof]
+        [(= (bytes-length buf) 9)
+         (define header-br (make-binary-reader (open-input-bytes buf)))
+         (define-values (len type flags streamid) (read-frame-header header-br))
+         (define payload
+           (b-call/save-limit br (lambda ()
+                                   (b-push-limit br len)
+                                   (read-frame-payload br type flags))))
+         (frame type flags streamid payload)]
+        [else (error 'read-frame-header/eof "short read! (~s bytes)" (bytes-length buf))]))
+
 (define (read-frame br)
   (define-values (len type flags streamid) (read-frame-header br))
   (define payload
