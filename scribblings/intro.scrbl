@@ -9,7 +9,7 @@
 
 @(begin
   (define-runtime-path log-file "log-intro.rktd")
-  (define the-eval (make-log-based-eval log-file 'record))
+  (define the-eval (make-log-based-eval log-file 'replay))
   (the-eval '(require http123 racket/class racket/port racket/pretty json
                       (submod http123/private/util pretty))))
 
@@ -70,7 +70,8 @@ connections with the original client.
 
 By default, the content handlers are only called for responses with
 status code 200 (``Found''). The default response handler raises an
-exception for any other response.
+exception for any other response. Additional response handlers can be
+added for individual status codes or status classes:
 @examples[#:eval the-eval #:label #f
 (define client3
   (send client2 fork
