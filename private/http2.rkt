@@ -418,7 +418,11 @@
         (loop/streams-changed)))
 
     (define/private (reader)
-      (sync in) ;; wait for input or EOF or closed
+      ;; Want to wait for input or EOF or closed. Should work to use (sync in),
+      ;; but that seems to fail to wake up sometimes. So workaround: use
+      ;; peek-byte and catch exn if port closed.
+      (with-handlers ([exn:fail? void]) (peek-byte in))
+      ;; (sync in) ;; wait for input or EOF or closed
       (cond [(port-closed? in)
              (log-http2-debug "<-- closed")
              (thread-send manager-thread 'EOF void) ;; treat like EOF
