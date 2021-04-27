@@ -34,9 +34,9 @@
    (h
     -
     ()
-    (time u . "10:17:32 PM")
-    (date u . "04-26-2021")
-    (milliseconds_since_epoch . 1619475452305))))
+    (time u . "11:57:43 AM")
+    (date u . "04-27-2021")
+    (milliseconds_since_epoch . 1619524663759))))
  #""
  #"")
 ((send client handle (request 'GET "https://tools.ietf.org/rfc/rfc7540.txt"))
@@ -135,7 +135,7 @@
    (0
     (u
      .
-     "(new http2-response%\n (status-code 200)\n (header\n  (new header%\n   (header-fields\n    '((#\"date\" #\"Mon, 26 Apr 2021 22:17:37 GMT\")\n      (#\"expires\" #\"-1\")\n      (#\"cache-control\" #\"private, max-age=0\")\n      (#\"content-type\" #\"text/html; charset=ISO-8859-1\")\n      (#\"p3p\"\n       #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n      (#\"content-encoding\" #\"gzip\")\n      (#\"server\" #\"gws\")\n      (#\"content-length\" #\"6237\")\n      (#\"x-xss-protection\" #\"0\")\n      (#\"x-frame-options\" #\"SAMEORIGIN\")))))\n ...)\n"))))
+     "(new http2-response%\n (status-code 200)\n (header\n  (new header%\n   (header-fields\n    '((#\"date\" #\"Tue, 27 Apr 2021 11:57:48 GMT\")\n      (#\"expires\" #\"-1\")\n      (#\"cache-control\" #\"private, max-age=0\")\n      (#\"content-type\" #\"text/html; charset=ISO-8859-1\")\n      (#\"p3p\"\n       #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n      (#\"content-encoding\" #\"gzip\")\n      (#\"server\" #\"gws\")\n      (#\"content-length\" #\"6590\")\n      (#\"x-xss-protection\" #\"0\")\n      (#\"x-frame-options\" #\"SAMEORIGIN\")))))\n ...)\n"))))
  #""
  #"")
 ((send resp get-status-code) ((3) 0 () 0 () () (q values 200)) #"" #"")
@@ -177,6 +177,6 @@
    (0
     (u
      .
-     "(new http2-response%\n (status-code 200)\n (header\n  (new header%\n   (header-fields\n    '((#\"date\" #\"Mon, 26 Apr 2021 22:17:38 GMT\")\n      (#\"expires\" #\"-1\")\n      (#\"cache-control\" #\"private, max-age=0\")\n      (#\"content-type\" #\"text/html; charset=ISO-8859-1\")\n      (#\"p3p\"\n       #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n      (#\"content-encoding\" #\"gzip\")\n      (#\"server\" #\"gws\")\n      (#\"content-length\" #\"5960\")\n      (#\"x-xss-protection\" #\"0\")\n      (#\"x-frame-options\" #\"SAMEORIGIN\")))))\n ...)\n"))))
+     "(new http2-response%\n (status-code 200)\n (header\n  (new header%\n   (header-fields\n    '((#\"date\" #\"Tue, 27 Apr 2021 12:01:49 GMT\")\n      (#\"expires\" #\"-1\")\n      (#\"cache-control\" #\"private, max-age=0\")\n      (#\"content-type\" #\"text/html; charset=ISO-8859-1\")\n      (#\"p3p\"\n       #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n      (#\"content-encoding\" #\"gzip\")\n      (#\"server\" #\"gws\")\n      (#\"content-length\" #\"5937\")\n      (#\"x-xss-protection\" #\"0\")\n      (#\"x-frame-options\" #\"SAMEORIGIN\")))))\n ...)\n"))))
  #""
  #"")

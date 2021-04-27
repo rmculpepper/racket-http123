@@ -9,7 +9,7 @@
 
 @(begin
   (define-runtime-path log-file "log-intro.rktd")
-  (define the-eval (make-log-based-eval log-file 'replay))
+  (define the-eval (make-log-based-eval log-file 'record))
   (the-eval '(require http123 racket/class racket/port racket/pretty json
                       (submod http123/private/util pretty))))
 

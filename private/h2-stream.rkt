@@ -28,6 +28,8 @@
     (init send-req?)
     (super-new)
 
+    (field [ID (format "~a.~a" (send conn get-ID) streamid)])
+
     ;; This class cares about frames, the state machine described in Section 5,
     ;; and flow control. It contains a pstate object (protocol state) that deals
     ;; with the structure of HTTP requests.
@@ -35,6 +37,7 @@
     ;; ------------------------------------------------------------
     ;; Stream info
 
+    (define/public (get-ID) ID)
     (define/public (get-conn) conn)
     (define/public (get-streamid) streamid)
     (define/public (client-originated?) (odd? streamid))
@@ -96,7 +99,7 @@
       (send conn connection-error errorcode debug))
 
     (define/public (stream-error errorcode [msg #f] [wrapped-exn #f])
-      (log-http2-debug "stream error: code = ~s, message = ~e" errorcode msg)
+      (log-http2-debug "~a stream error: code = ~s, message = ~e" ID errorcode msg)
       (queue-frame (frame type:RST_STREAM 0 streamid (fp:rst_stream errorcode)))
       (signal-ua-error #f errorcode msg wrapped-exn)
       (raise 'stream-error))
@@ -132,7 +135,8 @@
       (box-evt-set! resp-bxe (lambda () (raise e)))
       (box-evt-set! trailerbxe (lambda () (raise e)))
       (unless (port-closed? out-to-user)
-        (raise-user-in-exn e)))
+        (raise-user-in-exn e))
+      (log-http2-debug "~a sent exn to user: ~e" ID e))
 
     (define/public (get-user-communication)
       (values (make-pump-data-out) resp-bxe))
@@ -187,6 +191,7 @@
         [(idle)
          (case transition
            [(headers) (set-state! 'open)]
+           [(rst_stream) (set-state! 'closed)]
            [else (bad)])]
         [(reserved/local) ;; Only for servers
          (case transition
@@ -267,11 +272,11 @@
            [else (my-error)])]))
 
     (define/private (set-state! new-state)
-      #;(log-http2-debug "state ~s => ~s" state new-state)
+      #;(log-http2-debug "~a state ~s => ~s" ID state new-state)
       (define old-state state)
       (set! state new-state)
       (when (eq? new-state 'closed) ;; but not 'closed/by-me-recently
-        (log-http2-debug "removing stream #~s closed by server" streamid)
+        (log-http2-debug "~a removing stream closed by server" ID)
         (send conn remove-stream streamid)))
 
     ;; ------------------------------------------------------------
@@ -374,7 +379,7 @@
 
     (define/private (send-request req)
       (match-define (request method url header data) req)
-      (log-http2-debug "#~s initiating ~s request" streamid method)
+      (log-http2-debug "~a initiating ~s request" ID method)
       (define pseudo-header (make-pseudo-header method url))
       (define enc-header (encode-header (append pseudo-header header)
                                         (send conn get-sending-dt)))
@@ -633,12 +638,12 @@
     (define/override (handle-headers header)
       (send stream set-received! 'yes)
       (cond [(informational-response? header)
-             (log-http2-debug "#~s discarding Informational header"
-                              (send stream get-streamid))
+             (log-http2-debug "~a discarding Informational header"
+                              (send stream get-ID))
              ;; FIXME: do something with this header??
              (void)]
             [else
-             (log-http2-debug "#~s returning header to user" (send stream get-streamid))
+             (log-http2-debug "~a returning header to user" (send stream get-ID))
              (box-evt-set! resp-bxe (make-response-thunk header))
              (change-pstate! (send stream make-reading-response-pstate))]))
 
@@ -695,7 +700,7 @@
       (change-pstate! (send stream make-done-pstate)))
 
     (define/override (handle-headers header-entries)
-      (log-http2-debug "#~s returning trailer to user" (send stream get-streamid))
+      (log-http2-debug "~a returning trailer to user" (send stream get-ID))
       (define trailer-promise (make-header-promise stream header-entries "trailer"))
       (box-evt-set! trailerbxe (lambda () (force trailer-promise))))
 
@@ -713,7 +718,7 @@
              (set! last-progress-evt (port-progress-evt user-in))
              ;; buffered : space used in pipe's buffer
              (define buffered (- (file-position out-to-user) (file-position user-in)))
-             (log-http2-debug "user read from content buffer: buffered = ~s" buffered)
+             #;(log-http2-debug "user read from content buffer: buffered = ~s" buffered)
              (send stream update-in-flow-window buffered)]))
     ))
 
@@ -728,8 +733,8 @@
     (set-work-evt!
      (handle-evt (alarm-evt (+ (current-inexact-milliseconds) KEEP-AFTER-CLOSE-MS))
                  (lambda (ignore)
-                   (log-http2-debug "removing stream #~s closed after delay"
-                                    (send stream get-streamid))
+                   (log-http2-debug "~a removing stream closed after delay"
+                                    (send stream get-ID))
                    (send stream remove-stream))))
 
     (define/override (about) 'done)

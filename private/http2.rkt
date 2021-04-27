@@ -52,18 +52,22 @@
 
 ;; ============================================================
 
+(define counter 0)
+
 (define http2-actual-connection%
   (class* object% ()
     (init-field in out parent)
     (init [my-new-config init-config])
     (super-new)
 
+    (field [ID (format "#~X" (begin0 counter (set! counter (add1 counter))))])
     (define br (make-binary-reader in))
 
     (define config standard-init-config) ;; Config of server
     (define my-config standard-init-config) ;; Config of client, acked by server
     (define my-configs/awaiting-ack null) ;; (Listof Config), oldest-first
 
+    (define/public (get-ID) ID)
     (define/public (get-config) config)
     (define/public (get-my-config) my-config)
 
@@ -96,7 +100,7 @@
     ;; ----------------------------------------
 
     (define/public (queue-frame fr)
-      (log-http2-debug "--> ~a"
+      (log-http2-debug "~a --> ~a" ID
                        (parameterize ((error-print-width 60))
                          (format "~e" fr)))
       (adjust-out-flow-window (- (frame-fc-length fr)))
@@ -106,7 +110,7 @@
     (define/public (flush-frames) (flush-output out))
 
     (define/public (connection-error errorcode [comment #f] #:debug [debug #""])
-      (log-http2-debug "connection-error ~s, ~s" errorcode comment)
+      (log-http2-debug "~a connection-error ~s, ~s" ID errorcode comment)
       (queue-frame (frame type:GOAWAY 0 0 (fp:goaway last-server-streamid errorcode debug)))
       (flush-frames)
       (set-closed! 'by-error)
@@ -346,7 +350,7 @@
       ;; PRE: no live streams, it has been TIMEOUT-MS since any receives
       ;; FIXME: use PING, multiple timeouts before closing
       (unless is-closed?  ;; could have been abandoned since evt creation
-        (log-http2-debug "timeout, abandoning connection")
+        (log-http2-debug "~a timeout, abandoning connection" ID)
         (set-closed! 'timeout)
         (send-goaway)))
 
@@ -355,9 +359,11 @@
 
     (define/private (closed-timeout)
       ;; PRE: is-closed?
+      (log-http2-debug "~a ** closed-timeout" ID)
       (close-input-port in)
       (close-output-port out)
-      (for ([stream (in-hash-values stream-table)])
+      (for ([(streamid stream) (in-hash stream-table)])
+        (log-http2-debug "~a ** sending #~s handle-timeout" ID streamid)
         (send stream handle-timeout)))
 
     ;; ============================================================
@@ -378,10 +384,11 @@
         (handle-evt (thread-receive-evt)
                     (lambda (tre)
                       (define fr (thread-receive))
+                      #;(log-http2-debug "~a manager <== ~e" ID fr)
                       (handle-frame-or-other fr))))
       (define manager-bored-evt
         (wrap-evt (if #f (sleep-evt 5) never-evt)
-                  (lambda (ignored) (log-http2-debug "manager is bored!"))))
+                  (lambda (ignored) (log-http2-debug "~a manager is bored!" ID))))
       (define recv-timeout-evt
         (handle-evt (guard-evt (lambda () (get-recv-timeout-alarm-evt)))
                     (lambda (ignored) (recv-timeout))))
@@ -393,7 +400,7 @@
         (define work-evts
           (for/list ([stream (in-hash-values stream-table)])
             (send stream get-work-evt)))
-        (log-http2-debug "manager updating work evts (~s)" (length work-evts))
+        (log-http2-debug "~a manager updating work evts (~s)" ID (length work-evts))
         (define streams-evt (apply choice-evt work-evts))
         (loop streams-evt))
       (define (loop streams-evt)
@@ -405,16 +412,18 @@
                 closed-timeout-evt
                 manager-bored-evt))
         (flush-frames)
+        #;(log-http2-debug "~a flushed" ID)
         (if (begin0 streams-changed? (set! streams-changed? #f))
             (loop/streams-changed)
             (loop streams-evt)))
       ;; ----
       (with-handlers ([(lambda (e) (eq? e 'connection-error))
-                       (lambda (e) (log-http2-debug "manager stopped due to connection error"))]
+                       (lambda (e)
+                         (log-http2-debug "~a manager stopped due to connection error" ID))]
                       [(lambda (e) #t)
                        (lambda (e)
-                         (when exn? ((error-display-handler) (exn-message e) e))
-                         (log-http2-debug "manager stopped due to uncaught exn: ~e" e))])
+                         (log-http2-debug "~a manager stopped due to uncaught exn: ~e" ID e)
+                         (when exn? ((error-display-handler) (exn-message e) e)))])
         (loop/streams-changed)))
 
     (define/private (reader)
@@ -424,17 +433,17 @@
       (with-handlers ([exn:fail? void]) (peek-byte in))
       ;; (sync in) ;; wait for input or EOF or closed
       (cond [(port-closed? in)
-             (log-http2-debug "<-- closed")
+             (log-http2-debug "~a <-- closed" ID)
              (thread-send manager-thread 'EOF void) ;; treat like EOF
              (void)]
             [(eof-object? (peek-byte in))
-             (log-http2-debug "<-- EOF")
+             (log-http2-debug "~a <-- EOF" ID)
              (thread-send manager-thread 'EOF void)
              (void)]
             [else
              (define fr (read-frame br))
              ;; FIXME: handle reading errors...
-             (log-http2-debug "<-- ~a"
+             (log-http2-debug "~a <-- ~a" ID
                               (parameterize ((error-print-width 60))
                                 (format "~e" fr)))
              (set! last-recv-ms (current-inexact-milliseconds))
@@ -443,6 +452,7 @@
 
     (define manager-thread (thread (lambda () (manager))))
     (define reader-thread (thread (lambda () (reader))))
+
 
     ;; ============================================================
     ;; Methods called from user thread
