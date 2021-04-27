@@ -98,8 +98,10 @@
         (set! closed-ms (current-inexact-milliseconds))))
 
     (define/private (close-ports)
+      (break-thread reader-thread)
       (close-input-port in)
-      (close-output-port out))
+      (close-output-port out)
+      (log-http2-debug "~a closed ports and stopped reader thread" ID))
 
     ;; ----------------------------------------
 
@@ -441,61 +443,15 @@
                          (when exn? ((error-display-handler) (exn-message e) e)))])
         (loop/streams-changed)))
 
-    #;
     (define/private (reader)
-      ;; Want to wait for input or EOF or closed. Should work to use (sync in),
-      ;; but that seems to fail to wake up sometimes. So workaround: use
-      ;; peek-byte and catch exn if port closed.
-      (let loop ([n 0])
-        (if (sync/timeout 1 in)
-            (unless (zero? n) (log-http2-debug "~a in ready after ~s tries" ID n))
-            (loop (add1 n))))
-      (cond [(port-closed? in)
-             (log-http2-debug "~a <-- closed" ID)
-             (thread-send manager-thread 'EOF) ;; treat like EOF
-             (void)]
-            [(eof-object? (peek-byte in))
-             (log-http2-debug "~a <-- EOF" ID)
-             (thread-send manager-thread 'EOF)
-             (void)]
-            [else
-             (define fr (read-frame br))
-             ;; FIXME: handle reading errors...
-             (log-http2-debug "~a <-- ~a" ID
-                              (parameterize ((error-print-width 60))
-                                (format "~e" fr)))
-             (set! last-recv-ms (current-inexact-milliseconds))
-             (thread-send manager-thread fr)
-             (reader)]))
-
-    #;
-    (define/private (reader)
-      (define fr/eof (*read-frame/eof in br))
-      (cond [(eof-object? fr/eof)
-             (log-http2-debug "~a <-- EOF" ID)
-             (thread-send manager-thread 'EOF)
-             (void)]
-            [else
-             (log-http2-debug "~a <-- ~a" ID
-                              (parameterize ((error-print-width 40))
-                                (format "~e" fr/eof)))
-             (set! last-recv-ms (current-inexact-milliseconds))
-             (thread-send manager-thread fr/eof)
-             (reader)]))
-
-    (define/private (reader)
-      ;; Want to wait for input or EOF or closed. Should work to use (sync in),
-      ;; but that seems to fail to wake up sometimes. So workaround: use
-      ;; peek-byte and catch exn if port closed.
-      ;;(with-handlers ([exn:fail? void]) (peek-byte in))
       (sync (port-closed-evt in) in) ;; wait for input or EOF or closed
       (cond [(port-closed? in)
              (log-http2-debug "~a <-- closed" ID)
              (thread-send manager-thread 'EOF void) ;; treat like EOF
              (void)]
-            [(with-handlers (#;[exn:fail? (lambda (e) #t)])
-               ;; Somehow, the port-closed? guard above doesn't prevent frequent
-               ;; "peek-byte: input port is closed" errors. So just catch them.
+            [(with-handlers ([exn:fail? (lambda (e) #t)])
+               ;; There is a race between the port-closed? guard and peek-byte,
+               ;; so catch the occasional "input port is closed" error.
                (eof-object? (peek-byte in)))
              (log-http2-debug "~a <-- EOF" ID)
              (thread-send manager-thread 'EOF void)
@@ -511,7 +467,7 @@
              (reader)]))
 
     (define manager-thread (thread (lambda () (manager))))
-    (define reader-thread (thread (lambda () (reader))))
+    (define reader-thread (thread (lambda () (with-handlers ([exn:break? void]) (reader)))))
 
 
     ;; ============================================================
