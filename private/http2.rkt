@@ -35,8 +35,11 @@
 
 (define INIT-TARGET-IN-FLOW-WINDOW (expt 2 20)) ;; FIXME: config?
 
-(define RECV-TIMEOUT-MS 10e3) ;; FIXME: config? ok default?
-(define CLOSED-TIMEOUT-MS 2e3) ;; FIXME: config? ok default?
+;; FIXME: config? ok defaults?
+(define TIMEOUT-RECV-NONE-MS 10e3) ;; time after recv to send goaway when no open streams
+(define TIMEOUT-RECV-STREAMS-MS 10e3) ;; time after recv to send ping when open streams
+(define TIMEOUT-PING-MS 20e3) ;; time after recv to send goaway when open streams
+(define TIMEOUT-CLOSED-MS 2e3) ;; time after sending goaway to close ports
 
 (define standard-init-config
   (hasheq 'header-table-size 4096
@@ -60,7 +63,7 @@
     (init [my-new-config init-config])
     (super-new)
 
-    (field [ID (format "#~X" (begin0 counter (set! counter (add1 counter))))])
+    (field [ID (string-upcase (format "#~X" (begin0 counter (set! counter (add1 counter)))))])
     (define br (make-binary-reader in))
 
     (define config standard-init-config) ;; Config of server
@@ -88,14 +91,13 @@
     ;; is-closed? : (U #f 'by-goaway 'by-error 'user-abandoned 'EOF)
     ;; Value is #f if allowed to start new streams; symbol if not allowed.
     (define is-closed? #f)
-    (define closed-ms #f)
     (define/public (open?) (not is-closed?))
     (define/public (closed?) (not (open?)))
 
-    (define/private (set-closed! reason)
+    (define/private (set-closed! reason [timeout? #t])
       (unless is-closed?
         (set! is-closed? reason)
-        (set! closed-ms (current-inexact-milliseconds))))
+        (when timeout? (start-close-timeout!))))
 
     (define/private (close-ports)
       (break-thread reader-thread)
@@ -171,6 +173,7 @@
     (define/private (handle-frame-or-other v)
       (match v
         [(? frame? fr)
+         (update-received-time!)
          (handle-frame fr)
          (after-handle-frame)]
         ['EOF
@@ -262,8 +265,9 @@
                   [else (set! in-continue-frames (list fr))])]
            [(== type:PING)
             (check-stream-zero)
-            (queue-frame (frame type:PING flag:ACK 0 payload))
-            (flush-frames)]
+            (unless (flags-has? flags flag:ACK)
+              (queue-frame (frame type:PING flag:ACK 0 payload))
+              (flush-frames))]
            [(== type:GOAWAY)
             (check-stream-zero)
             (match-define (fp:goaway last-streamid errorcode debug) payload)
@@ -347,30 +351,55 @@
     ;; ------------------------------------------------------------
     ;; Timeouts
 
-    (define last-recv-ms (current-milliseconds))
+    (define timeout-base-ms (current-milliseconds))
+    (define timeout-mode 'recv) ;; 'recv | 'ping | 'closed
 
-    (define/private (get-recv-timeout-alarm-evt)
-      (cond [(or is-closed? (positive? (hash-count stream-table))) never-evt]
-            [else (alarm-evt (+ last-recv-ms RECV-TIMEOUT-MS))]))
+    (define/private (start-close-timeout!)
+      (set! timeout-mode 'closed)
+      (set! timeout-base-ms (current-milliseconds)))
 
-    (define/private (recv-timeout)
-      ;; PRE: no live streams, it has been TIMEOUT-MS since any receives
-      ;; FIXME: use PING, multiple timeouts before closing
-      (unless is-closed?  ;; could have been abandoned since evt creation
-        (log-http2-debug "~a timeout, abandoning connection" ID)
-        (set-closed! 'timeout)
-        (send-goaway)))
+    (define/private (update-received-time!)
+      (case timeout-mode
+        [(recv ping)
+         (set! timeout-base-ms (current-milliseconds))
+         (unless (eq? timeout-mode 'recv)
+           (set! timeout-mode 'recv))]
+        [(closed) (void)]))
 
-    (define/private (get-closed-timeout-alarm-evt)
-      (cond [(and closed-ms (not (port-closed? out)))
-             (alarm-evt (+ closed-ms CLOSED-TIMEOUT-MS))]
-            [else never-evt]))
+    (define/private (get-timeout-evt)
+      (define mode timeout-mode)
+      (wrap-evt (alarm-evt
+                 (+ timeout-base-ms
+                    (case mode
+                      [(recv)
+                       (if (zero? (hash-count stream-table))
+                           TIMEOUT-RECV-NONE-MS
+                           TIMEOUT-RECV-STREAMS-MS)]
+                      [(ping)
+                       TIMEOUT-PING-MS]
+                      [(closed)
+                       TIMEOUT-CLOSED-MS])))
+                (lambda (_) (handle-timeout mode))))
 
-    (define/private (closed-timeout)
-      ;; PRE: is-closed?
-      (close-ports)
-      (for ([(streamid stream) (in-hash stream-table)])
-        (send stream handle-timeout)))
+    (define/private (handle-timeout mode)
+      (case mode
+        [(recv)
+         (cond [(zero? (hash-count stream-table))
+                (log-http2-debug "~a timeout, abandoning connection" ID)
+                (set-closed! 'timeout)
+                (send-goaway)]
+               [else
+                (log-http2-debug "~a timeout, sending PING" ID)
+                (queue-frame (frame type:PING 0 0 (fp:ping (make-bytes 8 0))))
+                (set! timeout-mode 'ping)])]
+        [(ping)
+         (log-http2-debug "~a timeout (no response to PING), abandoning connection" ID)
+         (set-closed! 'timeout)
+         (send-goaway)]
+        [(closed)
+         (close-ports)
+         (for ([stream (in-hash-values stream-table)])
+           (send stream handle-timeout))]))
 
     ;; ============================================================
     ;; Connection threads (2 per connection)
@@ -394,12 +423,7 @@
       (define manager-bored-evt
         (wrap-evt (if #f (sleep-evt 1) never-evt)
                   (lambda (ignored) (log-http2-debug "~a manager is bored!" ID))))
-      (define recv-timeout-evt
-        (handle-evt (guard-evt (lambda () (get-recv-timeout-alarm-evt)))
-                    (lambda (ignored) (recv-timeout))))
-      (define closed-timeout-evt
-        (handle-evt (guard-evt (lambda () (get-closed-timeout-alarm-evt)))
-                    (lambda (ignored) (closed-timeout))))
+      (define timeout-evt (guard-evt (lambda () (get-timeout-evt))))
       ;; ----
       (define (loop/streams-changed)
         (define work-evts
@@ -414,8 +438,7 @@
                         [(lambda (e) (eq? e 'stream-error)) void])
           (sync streams-evt
                 reader-evt
-                recv-timeout-evt
-                closed-timeout-evt
+                timeout-evt
                 manager-bored-evt))
         (flush-frames)
         (cond [(port-closed? out)
@@ -452,7 +475,6 @@
              (log-http2-debug "~a <-- ~a" ID
                               (parameterize ((error-print-width 60))
                                 (format "~e" fr)))
-             (set! last-recv-ms (current-inexact-milliseconds))
              (thread-send manager-thread fr void)
              (reader)]))
 
@@ -487,8 +509,12 @@
 
     (define/public (abandon)
       (unless is-closed?
-        (set-closed! 'user-abandoned)
-        (thread-send manager-thread (lambda () (send-goaway)) void)))
+        (set-closed! 'user-abandoned #f)
+        (thread-send manager-thread
+                     (lambda ()
+                       (start-close-timeout!)
+                       (send-goaway))
+                     void)))
 
     ;; ============================================================
     ;; Hello, Goodbye

@@ -14,13 +14,15 @@
          "private/h2-frame.rkt"
          "private/hpack.rkt")
 
+(define TEST-TIMEOUT? #f)
+
 (define prelude
   (make-parameter
    (list (frame type:SETTINGS 0 0 (fp:settings null))
          (frame type:SETTINGS 1 0 (fp:settings null))
          'sleep)))
 
-;; An Action is Frame | 'sleep | ???.
+;; An Action is Frame | 'sleep | Real | ???.
 (define (make-server actions server-in server-out)
   (thread
    (lambda ()
@@ -30,6 +32,7 @@
            [(? frame? fr)
             (write-frame server-out fr)
             (flush-output server-out)]
+           [(? real? t) (sleep t)]
            ['sleep (sleep 0.02)]))
        (close-output-port server-out)
        (close-input-port server-in)))))
@@ -118,6 +121,16 @@
 (test1e (list #rx"window too large" conn-err (hasheq 'http2-error 'FLOW_CONTROL_ERROR))
         (list (frame type:WINDOW_UPDATE 0 0 (fp:window_update (sub1 (expt 2 31))))))
 
+;; timeout
+(when TEST-TIMEOUT?
+  (test1e (list #rx"connection closed by user agent \\(timeout\\)"
+                (hasheq 'code 'ua-timeout))
+          (list 60))
+  (test1e (list 'raise #rx"connection closed by server (RST_STREAM)"
+                (hasheq 'code 'server-reset-stream 'http2-error 'NO_ERROR))
+          (list 12 (frame type:PING flag:ACK 0 (fp:ping (make-bytes 8 0)))
+                10 (frame type:RST_STREAM 0 3 (fp:rst_stream error:NO_ERROR)))))
+
 ;; ----------------------------------------
 ;; from h2-stream:
 
@@ -153,7 +166,7 @@
         (list (frame type:RST_STREAM 0 3 (fp:rst_stream error:CONNECT_ERROR))))
 
 (test1e (list #rx"connection closed by server \\(GOAWAY\\)"
-              (hasheq 'version 'http/2 'code 'server-goaway 'received 'no 'http2-error 'NO_ERROR))
+              (hasheq 'version 'http/2 'code 'server-closed 'received 'no 'http2-error 'NO_ERROR))
         (list (frame type:GOAWAY 0 0 (fp:goaway 1 error:NO_ERROR #"bye"))))
 
 (test1e (list #rx"connection closed by server \\(EOF\\)"

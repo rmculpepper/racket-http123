@@ -176,7 +176,7 @@
 ;; check-header-entry : Any -> (values HeaderKeyBytes HeaderValueBytes)
 (define (check-header-entry entry)
   (match entry
-    [(list* #":status" (? bytes? (and (regexp #rx#"^[0-9][0-9][0-9]$") value)) _)
+    [(list* #":status" (? bytes? (and #;(regexp #rx#"^[0-9][0-9][0-9]$") value)) _)
      (list #":status" (bytes->immutable-bytes value))]
     [(list* (? bytes? (and (regexp (rx^$ lower-TOKEN)) key))
             (? bytes? (and (regexp (rx^$ FIELD-VALUE)) value))

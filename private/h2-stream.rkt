@@ -516,16 +516,13 @@
     ;; Default implementations, usually not overridden:
 
     (define/public (handle-rst_stream errorcode)
-      (cond [(= errorcode error:NO_ERROR) ;; see 8.1
-             (void)]
-            [else
-             (send-exn-to-user
-              (build-exn "stream closed by server (RST_STREAM)"
-                         (hash-set* (get-info-for-exn)
-                                    'code 'server-reset-stream
-                                    'http2-error (decode-error-code errorcode)
-                                    'http2-errorcode errorcode)))
-             (change-pstate! (send stream make-done-pstate))]))
+      (send-exn-to-user
+       (build-exn "stream closed by server (RST_STREAM)"
+                  (hash-set* (get-info-for-exn)
+                             'code 'server-reset-stream
+                             'http2-error (decode-error-code errorcode)
+                             'http2-errorcode errorcode)))
+      (change-pstate! (send stream make-done-pstate)))
 
     (define/public (handle-goaway last-streamid errorcode debug)
       ;; If this streamid > last-streamid, then server has not processed
