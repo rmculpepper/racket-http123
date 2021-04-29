@@ -19,7 +19,7 @@
             ([method (or/c 'GET 'HEAD 'POST 'PUT 'DELETE 'OPTIONS 'TRACE 'PATCH)]
              [url (or/c string? ok-http-url?)]
              [header (listof in-header-field/c)]
-             [data (or/c #f bytes? (-> (-> bytes? void?) any))])]{
+             [data (or/c #f bytes? (-> output-port? any))])]{
 
 Represents an HTTP @deftech{request}.
 
@@ -54,13 +54,13 @@ body}. The @racket[data] field must be one of the following forms:
 when using http/1.1, a @tt{Content-Length} header field will be added
 automatically).}
 
-@item{If @racket[data] is a procedure, it is called with a procedure
-@racket[_send-chunk] to incrementally produce the message body (and when using
-http/1.1, a @tt{Transfer-Encoding: chunked} header field will be added
-automatically). When the call to @racket[data] returns, the message body is
-complete and further calls to @racket[_send-chunk] have no effect. If the call
-to @racket[data] raises an exception, the request is cancelled (but the server
-may have already started processing it).}
+@item{If @racket[data] is a procedure, it is called with an output port to
+incrementally produce the message body (and when using http/1.1, a
+@tt{Transfer-Encoding: chunked} header field will be added automatically). When
+the output port is closed, the message body is complete; the output port is also
+closed automatically when the call to @racket[data] returns. If the call to
+@racket[data] raises an exception, the request is canceled (but the server may
+have already started processing it).}
 
 ]
 

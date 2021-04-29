@@ -144,7 +144,6 @@
     (define/private (unhandled-response resp)
       (send resp close-content-in)
       (h-error "no response handler matched"
-               (send resp get-status-class)
                #:info (hasheq 'code 'unhandled-response
                               'received 'yes
                               'response resp)))

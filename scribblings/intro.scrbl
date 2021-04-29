@@ -66,10 +66,15 @@ connections with the original client.
 (send client2 handle (request 'GET "https://www.google.com/"))
 ]
 
-By default, the content handlers are only called for responses with
-status code 200 (``Found''). The default response handler raises an
-exception for any other response. Additional response handlers can be
-added for individual status codes or status classes:
+By default, the content handlers are only called for responses with status code
+200 (``Found''). The default response handler raises an exception for any other
+response.
+@examples[#:eval the-eval #:label #f
+(eval:error
+ (send client2 handle (request 'GET "https://mirror.racket-lang.org/no-such-file.html")))
+]
+Additional response handlers can be added for individual status codes or status
+classes:
 @examples[#:eval the-eval #:label #f
 (define client3
   (send client2 fork
@@ -78,6 +83,18 @@ added for individual status codes or status classes:
           [client-error ,(lambda (client resp) 'failed)])))
 (send client3 handle (request 'GET "https://racket-lang.org/secret-plans.scrbl"))
 (send client3 handle (request 'GET "https://mirror.racket-lang.org/no-such-file.html"))
+]
+
+A response handler can call back to the client's @method[http-client<%>
+handle-response-content] method to process the content of responses with other
+status codes:
+@examples[#:eval the-eval #:label #f
+(define client4
+  (send client3 fork
+        #:add-response-handlers
+        `([404 ,(lambda (client resp)
+                  (list 'not-found (send client handle-response-content resp)))])))
+(send client4 handle (request 'GET "https://mirror.racket-lang.org/no-such-file.html"))
 ]
 
 

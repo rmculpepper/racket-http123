@@ -34,9 +34,9 @@
    (h
     -
     ()
-    (time u . "05:44:53 PM")
-    (date u . "04-27-2021")
-    (milliseconds_since_epoch . 1619545493142))))
+    (time u . "02:37:37 PM")
+    (date u . "04-29-2021")
+    (milliseconds_since_epoch . 1619707057425))))
  #""
  #"")
 ((send client handle (request 'GET "https://tools.ietf.org/rfc/rfc7540.txt"))
@@ -78,6 +78,19 @@
  ((3) 0 () 0 () () (c values c (u . "something called text/html, I guess")))
  #""
  #"")
+((send client2 handle
+   (request 'GET "https://mirror.racket-lang.org/no-such-file.html"))
+ ((3)
+  0
+  ()
+  0
+  ()
+  ()
+  (q
+   exn
+   "handle: no response handler matched\n  code: 'unhandled-response\n  response: 404 response with text/html body\n  received: 'yes"))
+ #""
+ #"")
 ((define client3
    (send client2 fork
      #:add-response-handlers
@@ -95,6 +108,27 @@
 ((send client3 handle
    (request 'GET "https://mirror.racket-lang.org/no-such-file.html"))
  ((3) 0 () 0 () () (q values not-found))
+ #""
+ #"")
+((define client4
+   (send client3 fork
+     #:add-response-handlers
+     (quasiquote
+      ((404
+        ,(lambda (client resp)
+           (list 'not-found (send client handle-response-content resp))))))))
+ ((3) 0 () 0 () () (c values c (void)))
+ #""
+ #"")
+((send client4 handle
+   (request 'GET "https://mirror.racket-lang.org/no-such-file.html"))
+ ((3)
+  0
+  ()
+  0
+  ()
+  ()
+  (c values c (c not-found c (u . "something called text/html, I guess"))))
  #""
  #"")
 ((define client (http-client)) ((3) 0 () 0 () () (c values c (void))) #"" #"")
@@ -135,7 +169,7 @@
    (0
     (u
      .
-     "(new http2-response%\n (status-code 200)\n (header\n  (new header%\n   (header-fields\n    '((#\"date\" #\"Tue, 27 Apr 2021 17:44:58 GMT\")\n      (#\"expires\" #\"-1\")\n      (#\"cache-control\" #\"private, max-age=0\")\n      (#\"content-type\" #\"text/html; charset=ISO-8859-1\")\n      (#\"p3p\"\n       #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n      (#\"content-encoding\" #\"gzip\")\n      (#\"server\" #\"gws\")\n      (#\"content-length\" #\"6237\")\n      (#\"x-xss-protection\" #\"0\")\n      (#\"x-frame-options\" #\"SAMEORIGIN\")))))\n ...)\n"))))
+     "(new http2-response%\n (status-code 200)\n (header\n  (new header%\n   (header-fields\n    '((#\"date\" #\"Thu, 29 Apr 2021 14:37:43 GMT\")\n      (#\"expires\" #\"-1\")\n      (#\"cache-control\" #\"private, max-age=0\")\n      (#\"content-type\" #\"text/html; charset=ISO-8859-1\")\n      (#\"p3p\"\n       #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n      (#\"content-encoding\" #\"gzip\")\n      (#\"server\" #\"gws\")\n      (#\"content-length\" #\"6225\")\n      (#\"x-xss-protection\" #\"0\")\n      (#\"x-frame-options\" #\"SAMEORIGIN\")))))\n ...)\n"))))
  #""
  #"")
 ((send resp get-status-code) ((3) 0 () 0 () () (q values 200)) #"" #"")
@@ -177,6 +211,6 @@
    (0
     (u
      .
-     "(new http2-response%\n (status-code 200)\n (header\n  (new header%\n   (header-fields\n    '((#\"date\" #\"Tue, 27 Apr 2021 17:44:59 GMT\")\n      (#\"expires\" #\"-1\")\n      (#\"cache-control\" #\"private, max-age=0\")\n      (#\"content-type\" #\"text/html; charset=ISO-8859-1\")\n      (#\"p3p\"\n       #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n      (#\"content-encoding\" #\"gzip\")\n      (#\"server\" #\"gws\")\n      (#\"content-length\" #\"5971\")\n      (#\"x-xss-protection\" #\"0\")\n      (#\"x-frame-options\" #\"SAMEORIGIN\")))))\n ...)\n"))))
+     "(new http2-response%\n (status-code 200)\n (header\n  (new header%\n   (header-fields\n    '((#\"date\" #\"Thu, 29 Apr 2021 14:37:45 GMT\")\n      (#\"expires\" #\"-1\")\n      (#\"cache-control\" #\"private, max-age=0\")\n      (#\"content-type\" #\"text/html; charset=ISO-8859-1\")\n      (#\"p3p\"\n       #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n      (#\"content-encoding\" #\"gzip\")\n      (#\"server\" #\"gws\")\n      (#\"content-length\" #\"5973\")\n      (#\"x-xss-protection\" #\"0\")\n      (#\"x-frame-options\" #\"SAMEORIGIN\")))))\n ...)\n"))))
  #""
  #"")

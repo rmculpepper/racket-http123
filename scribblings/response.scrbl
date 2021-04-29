@@ -20,6 +20,10 @@ the response occurring after the header.
 @defmethod[(get-request) request?]{
 
 Returns the @tech{request} that generated this response.
+
+Note: this request is generally the result of the client's
+@method[http-client<%> adjust-request] method, so it is not equal to the
+original request given to the client. Do not rely on request equality.
 }
 
 @defmethod[(get-version) (or/c 'http/1.1 'http/2)]{
