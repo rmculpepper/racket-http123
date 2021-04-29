@@ -75,7 +75,8 @@
 
 (define http-client%
   (class* object% (http-client<%>)
-    (init-field [base (new connection-manager%)]
+    (init [ssl 'secure])
+    (init-field [base (new connection-manager% (ssl ssl))]
                 [base-header default-base-header]
                 [response-handlers null]
                 [content-handlers null]

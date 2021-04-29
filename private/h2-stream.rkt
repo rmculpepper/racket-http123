@@ -599,7 +599,8 @@
       (define (check-at-eof?) ;; check for EOF w/o blocking
         (eof-object? (peek-bytes-avail!* (make-bytes 1) 0 #f in-from-user)))
       (define (send-data data end?)
-        (queue-frame (frame type:DATA (if end? flag:END_STREAM 0) streamid data))
+        (queue-frame (frame type:DATA (if end? flag:END_STREAM 0) streamid
+                            (fp:data 0 data)))
         ;; On EOF, close in-from-user so work-evt will ignore it.
         (when end? (close-input-port in-from-user)))
       (define allowed-len (send stream get-effective-out-flow-window))
@@ -610,6 +611,7 @@
           (define r (read-bytes-avail!* buf in-from-user))
           (define end? (or (eof-object? r) (check-at-eof?)))
           (cond [(eof-object? r) (begin (send-data #"" #t) #t)]
+                [(zero? r) end?]
                 [(< r len) (begin (send-data (subbytes buf 0 r) end?) end?)]
                 [else (begin (send-data buf end?) (or end? (loop (- allowed-len r))))])))
       (when end?

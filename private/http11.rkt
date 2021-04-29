@@ -144,7 +144,7 @@
         (cond [(procedure? data)
                (fprintf out "transfer-encoding: chunked\r\n")]
               [(bytes? data)
-               (format "content-length: ~a\r\n" (bytes-length data))]
+               (fprintf out "content-length: ~a\r\n" (bytes-length data))]
               [else
                ;; If no content data, don't add Content-Length header field.
                ;; FIXME!!!
