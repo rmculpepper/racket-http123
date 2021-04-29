@@ -1,7 +1,7 @@
 #lang scribble/manual
 @(require "util.rkt"
           (for-label racket/base racket/contract racket/class
-                     net/url http123 net/cookies/user-agent))
+                     net/url http123 openssl net/cookies/user-agent))
 
 @; ------------------------------------------------------------
 @title[#:tag "client"]{Client API}
@@ -9,7 +9,8 @@
 An HTTP client offers methods to perform @tech{requests} and handle
 @tech{responses}.
 
-@defproc[(http-client [#:add-header header-fields (listof header-field/c) null]
+@defproc[(http-client [#:ssl ssl (or/c 'secure 'auto ssl-client-context?) 'secure]
+                      [#:add-header header-fields (listof header-field/c) null]
                       [#:add-response-handlers response-handlers
                        (listof
                         (list/c (or/c (integer-in 100-599) status-class/c)
@@ -41,7 +42,10 @@ requests, only http/1.1 is supported.
 Connections created by the client are automatically closed after a
 few seconds of inactivity.
 
-See @method[http-client<%> fork] for an explanation of the arguments.
+The @racket[ssl] argument determines the client context used by
+@racket[ssl-connect] when making @tt{https} connections.
+
+See @method[http-client<%> fork] for an explanation of the other arguments.
 }
 
 @definterface[http-client<%> ()]{
