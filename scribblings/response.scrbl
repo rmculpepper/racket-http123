@@ -17,6 +17,11 @@ proceeds concurrently. See @method[response<%> get-content-in] and
 @method[response<%> get-trailer-evt] for notes on exceptions regarding errors in
 the response occurring after the header.
 
+@defmethod[(get-request) request?]{
+
+Returns the @tech{request} that generated this response.
+}
+
 @defmethod[(get-version) (or/c 'http/1.1 'http/2)]{
 
 Returns a symbol identifying version of HTTP used to retrieve the response.

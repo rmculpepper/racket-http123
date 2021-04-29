@@ -1,7 +1,7 @@
 #lang scribble/manual
 @(require "util.rkt"
           (for-label racket/base racket/contract racket/class
-                     net/url http123))
+                     net/url http123 net/cookies/user-agent))
 
 @; ------------------------------------------------------------
 @title[#:tag "client"]{Client API}
@@ -17,7 +17,16 @@ An HTTP client offers methods to perform @tech{requests} and handle
                        null]
                       [#:add-content-handlers content-handlers
                        (listof (list/c symbol? content-handler/c))
-                       null])
+                       null]
+                      [#:add-request-adjuster request-adjuster
+                       (or/c #f (-> request? request?))
+                       #f]
+                      [#:add-response-listener response-listener
+                       (or/c #f (-> (is-a?/c response<%>) void?))
+                       #f]
+                      [#:add-cookie-jar cookie-jar
+                       (or/c #f (is-a?/c cookie-jar<%>))
+                       #f])
          (is-a?/c http-client<%>)]{
 
 Creates a new HTTP client that does not share connections with any
@@ -37,10 +46,22 @@ See @method[http-client<%> fork] for an explanation of the arguments.
 
 @definterface[http-client<%> ()]{
 
-A client contains a list of header fields to be added to requests (see
-@method[http-client<%> adjust-request]), a list of response handlers (see
-@method[http-client<%> handle-response]), and a list of content handlers (see
-@method[http-client<%> handle-content]).
+A client contains the following:
+@itemlist[
+
+@item{a connection manager that manages existing connections and creates new ones on
+demand}
+
+@item{instructions for adjusting requests before they are executed (see
+@method[http-client<%> adjust-request])---specifically, a base header and a list
+of adjuster functions}
+
+@item{instructions for handling responses once they are received (see
+@method[http-client<%> handle-response])---specifically, a list of listeners, a
+list of response handlers, and a list of content handlers (see
+@method[http-client<%> handle-response-content])}
+
+]
 
 @defmethod[(fork [#:add-header header-fields (listof header-field/c) null]
                  [#:add-response-handlers response-handlers
@@ -50,12 +71,22 @@ A client contains a list of header fields to be added to requests (see
                   null]
                  [#:add-content-handlers content-handlers
                   (listof (list/c symbol? content-handler/c))
-                  null])
+                  null]
+                 [#:add-request-adjuster request-adjuster
+                  (or/c #f (-> request? request?))
+                  #f]
+                 [#:add-response-listener response-listener
+                  (or/c #f (-> (is-a?/c response<%>) void?))
+                  #f]
+                 [#:add-cookie-jar cookie-jar
+                  (or/c #f (is-a?/c cookie-jar<%>))
+                  #f])
            (is-a?/c http-client<%>)]{
 
-Creates a new client object that shares the same connections as @(this-obj), but
-adds the given header fields and handlers. The new header fields and handlers
-take precedence over the existing header fields and handlers. In particular:
+Creates a new client object that shares the same connection manager as
+@(this-obj), but adds the given header fields and handlers. The new header
+fields and handlers take precedence over the existing header fields and
+handlers. More precisely:
 @itemlist[
 
 @item{The header of the new client object consists of @racket[header-fields],
@@ -66,25 +97,58 @@ occur in @racket[header-fields].}
 @racket[response-handlers] and @racket[content-handlers] prepended to the
 existing response and content handlers, respectively.}
 
-]}
+@item{The request adjusters of the new client consist of the new
+@racket[request-adjuster] added to the existing request adjusters. That is, the
+new adjuster is run before the existing adjusters.}
+
+@item{The response listeners of the new client consist of the old listeners with
+@racket[response-listener], if present, added to the end. That is, the new
+response listener is run after the existing listeners.}
+
+]
+
+A @racket[cookie-jar] argument is converted to a request adjuster and a response
+handler. The request adjuster adds @tt{Cookie} fields to the request header; the
+response listener scans the response for @tt{Set-Cookie} fields and adds them to
+@racket[cookie-jar]. (Beware, the default @racket[list-cookie-jar%]
+implementation is not thread-safe. Access to @racket[cookie-jar] is synchronized
+for @(this-obj) and derived clients, but not for other clients that
+@racket[cookie-jar] is added to separately.)
+}
 
 @defmethod[(handle [req request?])
            any]{
 
-Adjusts @racket[req] using the client's default header fields (see
-@method[http-client<%> adjust-request]), executes the request, and handles
-the response according to the client's response and content handlers (see
-@method[http-client<%> handle-response] and @method[http-client<%>
-handle-content]).
+Adjusts @racket[req] using the client's default header fields and adjusters (see
+@method[http-client<%> adjust-request]), executes the request, notifies the
+response listeners, and handles the response according to the client's response
+and content handlers (see @method[http-client<%> handle-response] and
+@method[http-client<%> handle-response-content]).
 
 The result is the result of the selected response handler.
+
+Equivalent to
+@racketblock[
+(send @#,(this-obj) @#,method[http-client<%> handle-response]
+      (send @#,(this-obj) @#,method[http-client<%> sync-request] req))
+]}
+
+@defmethod[(adjust-request [req request?]) request?]{
+
+Returns a request like @racket[req] except enriched with the client's header
+fields and transformed by the client's request adjusters.
+
+A header field from the client is only included if @racket[req] does not
+already have a header field of the same name. That is, @racket[req]'s header
+fields take precedence over the client's header fields.
 }
 
 @defmethod[(handle-response [resp (is-a?/c response<%>)])
            any]{
 
-Handles the response by calling the first matching response handler, or if none
-match, by calling the default handler.
+Notifies the client's response listeners (oldest first) and then handles the
+response by calling the first matching response handler, or if none match, by
+calling the default handler.
 
 A handler entry matches @racket[resp] according to the following rules:
 @itemlist[
@@ -105,14 +169,13 @@ if @racket[_status-class-symbol] is equal to @racket[(send resp
 ]
 If a handler is selected, it is called with @(this-obj) and @racket[resp].
 
-The default handler calls @method[http-client<%> handle-content] if
+The default handler calls @method[http-client<%> handle-response-content] if
 @racket[resp] has the status code 200 (Found); otherwise, it closes
 @racket[resp]'s content input port and raises an exception. (Closing the content
 input port may cause an http/2 connection to cancel the corresponding stream.)
 }
 
-@defmethod[(handle-content [resp (is-a?/c response<%>)])
-           any]{
+@defmethod[(handle-response-content [resp (is-a?/c response<%>)]) any]{
 
 Handles the response by calling the first matching content handler on
 @racket[resp]'s content input port, or if none match, by calling the default
@@ -137,14 +200,6 @@ If a handler is selected, it is called with @racket[(send resp
 
 The default content handler closes @racket[resp]'s content input port and raises
 an exception.
-}
-
-@defmethod[(adjust-request [req request?]) request?]{
-
-Returns a request like @racket[req] except enriched with the client's header
-fields. A header field from the client is only included if @racket[req] does not
-already have a header field of the same name. That is, @racket[req]'s header
-fields take precedence over the client's header fields.
 }
 
 @defmethod[(sync-request [req request?]) (is-a?/c response<%>)]{
@@ -187,8 +242,8 @@ This method does not use the client's response and content handlers.
 
 @defparam[current-response resp (or/c #f (is-a?/c response<%>))]{
 
-The @method[http-client<%> handle-content] sets this parameter to the response
-being handled for the duration of a call to a content handler.
+The @method[http-client<%> handle-response-content] sets this parameter to the
+response being handled for the duration of a call to a content handler.
 }
 
 @defthing[response-handler/c contract?
@@ -200,5 +255,6 @@ Contract for response handlers. See @method[http-client<%> handle-response].
 @defthing[content-handler/c contract?
           #:value (-> input-port? any)]{
 
-Contract for content handlers. See @method[http-client<%> handle-content].
+Contract for content handlers. See @method[http-client<%>
+handle-response-content].
 }

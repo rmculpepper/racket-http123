@@ -6,6 +6,7 @@
          racket/contract/base
          racket/match
          net/url-structs
+         net/cookies/user-agent
          "interfaces.rkt"
          "regexp.rkt"
          "header-base.rkt"
@@ -48,12 +49,12 @@
   (interface (http-client-base<%>)
     [fork
      (->*m []
-           [#:set-header (or/c #f in-header/c)
-            #:add-header in-header/c
-            #:set-response-handlers (or/c #f (listof response-handler-entry/c))
+           [#:add-header in-header/c
             #:add-response-handlers (listof response-handler-entry/c)
-            #:set-content-handlers (or/c #f (listof content-handler-entry/c))
-            #:add-content-handlers (listof content-handler-entry/c)]
+            #:add-content-handlers (listof content-handler-entry/c)
+            #:add-request-adjuster (or/c #f (-> request? request?))
+            #:add-response-listener (or/c #f (-> response/c void?))
+            #:add-cookie-jar (or/c #f (is-a?/c cookie-jar<%>))]
            any)]
     [handle
      (->m request? any)]
@@ -77,54 +78,70 @@
     (init-field [base (new connection-manager%)]
                 [base-header default-base-header]
                 [response-handlers null]
-                [content-handlers null])
+                [content-handlers null]
+                [request-adjusters null]
+                [response-listeners null])
     (super-new)
 
-    (define/public (fork #:set-header [set-header #f]
-                         #:add-header [in-add-header null]
-                         #:set-response-handlers [set-response-handlers #f]
+    (define/public (fork #:add-header [in-add-header null]
                          #:add-response-handlers [new-response-handlers null]
-                         #:set-content-handlers [set-content-handlers #f]
-                         #:add-content-handlers [new-content-handlers null])
+                         #:add-content-handlers [new-content-handlers null]
+                         #:add-request-adjuster [new-request-adjuster #f]
+                         #:add-response-listener [new-resp-listener #f]
+                         #:add-cookie-jar [cookie-jar #f])
+      (define (list-if x) (if x (list x) null))
+      (define-values (cookie-adjuster cookie-listener)
+        (if cookie-jar
+            (let ([lock (make-semaphore 1)])
+              (values (make-cookie-request-adjuster cookie-jar lock)
+                      (make-cookie-response-listener cookie-jar lock)))
+            (values #f #f)))
       (with-entry-point 'fork
         (define add-header (check-header-field-list in-add-header))
         (new http-client%
              (base base)
-             (base-header
-              (let ([base-header (if set-header (check-header-field-list set-header) base-header)])
-                (header-field-list-update base-header add-header)))
-             (response-handlers
-              (append (or set-response-handlers response-handlers) new-response-handlers))
-             (content-handlers
-              (append (or set-content-handlers content-handlers) new-content-handlers)))))
+             (base-header (header-field-list-update base-header add-header))
+             (response-handlers (append new-response-handlers response-handlers))
+             (content-handlers (append new-content-handlers content-handlers))
+             (request-adjusters
+              (append (list-if new-request-adjuster) (list-if cookie-adjuster) request-adjusters))
+             (response-listeners
+              (append response-listeners (list-if cookie-listener) (list-if new-resp-listener))))))
 
     (define/public (adjust-request req)
-      (match-define (request method url header data) req)
-      (define new-header (header-field-list-update base-header header))
-      (request method url new-header data))
+      (with-entry-point 'adjust-request
+        (match-define (request method url header data) req)
+        (define new-header (header-field-list-update base-header header))
+        (for/fold ([req (request method url new-header data)])
+                  ([adj (in-list request-adjusters)])
+          (adj req))))
 
     (define/public (handle req)
       (with-entry-point 'handle
         (handle-response (sync-request req))))
 
     (define/public (handle-response resp)
-      (define handler
-        (cond [(assoc* (list (send resp get-status-code)
-                             (send resp get-status-class)
-                             'else)
-                       response-handlers)
-               => cadr]
-              [else #f]))
-      (if handler
-          (handler this resp)
-          (default-response-handler resp)))
+      (with-entry-point 'handle-response
+        (for ([listener (in-list response-listeners)])
+          (listener resp))
+        (define handler
+          (cond [(assoc* (list (send resp get-status-code)
+                               (send resp get-status-class)
+                               'else)
+                         response-handlers)
+                 => cadr]
+                [else #f]))
+        (if handler
+            (handler this resp)
+            (default-response-handler resp))))
 
     (define/public (default-response-handler resp)
-      (case (send resp get-status-code)
-        [(200) (handle-response-content resp)]
-        [else (unhandled-response resp)]))
+      (with-entry-point 'default-response-handler
+        (case (send resp get-status-code)
+          [(200) (handle-response-content resp)]
+          [else (unhandled-response resp)])))
 
-    (define/public (unhandled-response resp)
+    (define/private (unhandled-response resp)
       (send resp close-content-in)
       (h-error "no response handler matched"
                (send resp get-status-class)
@@ -133,19 +150,21 @@
                               'response resp)))
 
     (define/public (handle-response-content resp)
-      (define type (or (send resp get-content-type) #f))
-      (define handler
-        (cond [(assoc* (list type '*/*) content-handlers) => cadr]
-              [else #f]))
-      (if handler
-          (parameterize ((current-response resp))
-            (handler (send resp get-content-in #t)))
-          (default-content-handler resp)))
+      (with-entry-point 'handle-response-content
+        (define type (or (send resp get-content-type) #f))
+        (define handler
+          (cond [(assoc* (list type '*/*) content-handlers) => cadr]
+                [else #f]))
+        (if handler
+            (parameterize ((current-response resp))
+              (handler (send resp get-content-in #t)))
+            (default-response-content-handler resp))))
 
-    (define/public (default-content-handler resp)
-      (unhandled-content resp))
+    (define/public (default-response-content-handler resp)
+      (with-entry-point 'default-response-content-handler
+        (unhandled-content resp)))
 
-    (define/public (unhandled-content resp)
+    (define/private (unhandled-content resp)
       (send resp close-content-in)
       (h-error "no content handler matched"
                #:info (hasheq 'code 'unhandled-content
@@ -165,11 +184,6 @@
 
 ;; ----------------------------------------
 
-;; Goal for merging:
-;;   (hash-ref merged key #f) = (or (hash-ref new key #f) (hash-ref old key #f))
-
-;; FIXME: check hash contents
-
 (define (assoc* ks alist)
   (match alist
     ['() #f]
@@ -178,11 +192,36 @@
 
 ;; ----------------------------------------
 
+(define ((make-cookie-request-adjuster cookie-jar lock) req)
+  (match-define (request method url header data) req)
+  (define cookies
+    (call-with-semaphore lock (lambda () (send cookie-jar cookies-matching url))))
+  (define encode string->bytes/utf-8)
+  (define cookie-header-fields
+    (for/list ([cookie (in-list cookies)])
+      (list #"cookie" (bytes-append (encode (ua-cookie-name cookie))
+                                    #"="
+                                    (encode (ua-cookie-value cookie))))))
+  (request method url (append header cookie-header-fields) data))
+
+(define ((make-cookie-response-listener cookie-jar lock) resp)
+  (define header (send resp get-header))
+  (define cookies (send header get-values 'set-cookie))
+  (when cookies
+    (define c-header (for/list ([cookie (in-list cookies)]) (cons #"set-cookie" cookie)))
+    (define url (request-url (send resp get-request)))
+    (parameterize ((current-cookie-jar cookie-jar))
+      (call-with-semaphore lock (lambda () (extract-and-save-cookies! c-header url)))))
+  (void))
+
+;; ----------------------------------------
+
 #;
 (begin (define req (request 'GET "https://www.google.com/"))
        (define req1 (request 'GET "http://www.neverssl.com/"))
        (define c0 (new http-client%))
-       (require racket/port)
-       (define c (send c0 fork #:add-content-handlers `([text/html ,port->string]))))
+       (require racket/port net/cookies/user-agent)
+       (define c (send c0 fork #:add-content-handlers `([text/html ,port->string])
+                       #:add-cookie-jar (current-cookie-jar))))
 
 ;; FIXME: beware empty paths: (GET "https://www.google.com") fails!
