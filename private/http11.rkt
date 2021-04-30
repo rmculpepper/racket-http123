@@ -209,7 +209,7 @@
                                  (build-exn "error reading response from server"
                                             (hasheq 'request req
                                                     'version 'http/1.1
-                                                    'received 'unknown
+                                                    'received 'yes
                                                     'code 'error-reading-response
                                                     'wrapped-exn e)))
                                (box-evt-set! bxe (lambda () (raise e*)))
@@ -233,12 +233,12 @@
     ;; Got EOF from server at the beginning of a response.
     (define/private (reader/eof sr)
       (log-http1-debug "got EOF from server")
-      (close-from-reader 'eof #t #f)
+      (close-from-reader 'eof #t sr)
       (log-http1-debug "ending reader loop due to EOF from server"))
 
     ;; Got "Connection: close" from server in previous response.
     (define/private (reader/close)
-      (fail-queue 'no)
+      (fail-queue 'close 'no)
       (close-from-reader 'close #f)
       (log-http1-debug "ending reader loop due to Connection:close from server"))
 
