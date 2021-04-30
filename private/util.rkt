@@ -19,17 +19,20 @@
 ;; Check after conversion to avoid race with concurrent modification.
 
 (define (string->bytes/ascii s [err-byte #f] [start 0] [end (string-length s)])
-  (define bs (string->bytes/latin-1 s 255 start end))
+  (define bs (string->bytes/latin-1 s (or err-byte 255) start end))
   (unless (ascii-bytes? bs)
     (raise-argument-error 'string->bytes/ascii
                           "string cannot be encoded in ASCII" s))
   bs)
 
 (define (bytes->string/ascii bs [err-char #f] [start 0] [end (bytes-length bs)])
-  (define s (bytes->string/latin-1 bs err-char start end))
+  (define err-char*
+    (cond [(and err-char (< (char->integer err-char) 128)) err-char]
+          [else (integer->char 255)]))
+  (define s (bytes->string/latin-1 bs err-char* start end))
   (unless (ascii-string? s)
     (raise-argument-error 'bytes->string/ascii
-                          "byte string contains non-ASCII characters" bs))
+                          "byte string is not a well-formed ASCII encoding" bs))
   s)
 
 

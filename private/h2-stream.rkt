@@ -461,17 +461,6 @@
                              #:info (hasheq 'wrapped-exn e)))
      (make-header-from-entries header-entries))))
 
-;; ----------------------------------------
-
-(define (proxy-output-port out)
-  (make-output-port* #:name (object-name out)
-                     #:evt out
-                     #:write-out out
-                     #:close void
-                     #:get-write-evt (and (port-writes-atomic? out)
-                                          (lambda (buf start end)
-                                            (write-bytes-avail-evt buf out start end)))))
-
 
 ;; ============================================================
 
