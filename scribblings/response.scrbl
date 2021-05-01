@@ -1,7 +1,7 @@
 #lang scribble/manual
 @(require "util.rkt"
           (for-label racket/base racket/contract racket/class
-                     net/url http123))
+                     net/url http123 http123/util/header))
 
 @; ------------------------------------------------------------
 @title[#:tag "response"]{Responses}

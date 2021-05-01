@@ -3,7 +3,7 @@
           racket/runtime-path
           "util.rkt"
           (for-label racket/base racket/contract racket/class
-                     net/url http123))
+                     net/url http123 http123/util/header))
 
 @(begin
   (define-runtime-path log-file "log-header.rktd")
@@ -26,39 +26,6 @@ Requests use the following representation of headers: a header is a
 list of header fields. The user may supply header fields in the form
 described by @racket[in-header-field/c], but they are checked and
 converted into the form described by @racket[header-field/c].
-
-@defthing[in-header-field/c contract?
-          #:value (or/c string?
-                        bytes?
-                        (list/c (or/c symbol? string? bytes?)
-                                (or/c string? bytes?)))]{
-
-Represents the forms that a user may supply a header field as an
-argument (for example, the header argument to @racket[request]).
-
-Examples:
-@racketblock[
-"Accept-Encoding:   gzip, deflate  "
-'(accept-language #"en")
-'(#"User-Agent" #"racket-http123/0.1")
-]}
-
-@defthing[header-field/c contract?
-          #:value (list/c (and/c bytes? immutable? ...lowercase-token-rx...)
-                          (and/c bytes? immutable? ...field-value-rx...))]{
-
-The canonical representation of a header field. The header field name
-is represented as an immutable byte string with no upper-case
-letters. The header field value is represented as an immutable byte
-string; whitespace is trimmed from the beginning and end of the field
-value.
-
-Examples:
-@racketblock[
-'(#"accept-encoding" #"gzip, deflate")
-'(#"accept-language" #"en")
-'(#"user-agent" #"racket-http123/0.1")
-]}
 
 
 @; ------------------------------------------------------------

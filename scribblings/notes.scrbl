@@ -8,6 +8,9 @@
 @; ------------------------------------------------------------
 @section[#:tag "known-issues"]{Known Issues and Limitations}
 
+Support for http/2 requires Racket 8.1 or later, because previous versions of
+Racket's @racketmodname[openssl] bindings do not support ALPN.
+
 The following features are currently unsupported:
 @itemlist[
 
@@ -31,8 +34,6 @@ initial @tt{SETTINGS} frame at connection startup disables the feature.}
 @item{stream @h2rfc["section-5.3"]{priorities} (http/2)}
 
 @item{various limits on protocol elements, with reasonable defaults}
-
-@item{automatic cookie handling}
 
 ]
 
@@ -84,14 +85,14 @@ such events cannot tell which one raised the exception.
 @section[#:tag "hpack-indexing"]{HPACK Indexing Policy}
 
 HPACK (the compression scheme for http/2 headers) is designed to reduce
-vulnerability to attacks like CRIME, which can discover secrets in headers by
-injecting data into the header and observing the effectiveness of header
-compression. Part of this defense is intrinsic, but HPACK additionally allows
-senders to choose which header fields are ``indexed''---that is, entered into
-the dynamic compression table, to further protect secret header data. For
-example, some http/2 client libraries automatically mark @tt{Authorization}
-fields and short @tt{Cookie} fields as not-indexed, since they might contain
-low-entropy secret data.
+vulnerability to attacks like @hyperlink["https://en.wikipedia.org/wiki/CRIME"]{CRIME},
+which can discover secrets in headers by injecting data into the header and
+observing the effectiveness of header compression. Part of this defense is
+intrinsic, but HPACK additionally allows senders to choose which header fields
+are ``indexed''---that is, entered into the dynamic compression table, to
+further protect secret header data. For example, some http/2 client libraries
+automatically mark @tt{Authorization} fields and short @tt{Cookie} fields as
+not-indexed, since they might contain low-entropy secret data.
 
 This library indexes @tt{Authorization} and @tt{Cookie} fields by default. In
 general, it does not mark any header fields as not-indexed based on security

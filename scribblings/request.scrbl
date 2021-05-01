@@ -3,7 +3,8 @@
           racket/list
           racket/runtime-path
           "util.rkt"
-          (for-label racket/base racket/contract racket/class net/url http123))
+          (for-label racket/base racket/contract racket/class net/url
+                     http123 http123/util/url http123/util/header))
 
 @(begin
   (define-runtime-path log-file "log-request.rktd")
@@ -95,27 +96,6 @@ agent):
  (P (request 'HEAD "https://blog.racket-lang.org/"
              '("If-Modified-Since: Sun, 14 Feb 2021 01:00:00 GMT"))))
 ]}
-
-@defproc[(ok-http-url? [v any/c]) boolean?]{
-
-Returns @racket[#t] if @racket[v] is a URL structure (@racket[url?]) that
-satisfies the following constraints, @racket[#f] otherwise. The constraints are:
-@itemlist[
-
-@item{the scheme is @racket["http"] or @racket["https"] (compared case-insensitively)}
-@item{the user field is absent (@racket[#f])}
-@item{the host field is present}
-@item{the path is marked as absolute}
-
-]
-
-@examples[#:eval the-eval
-(ok-http-url? (string->url "http://racket-lang.org/"))
-(ok-http-url? (string->url "http://ryanc@racket-lang.org/"))
-(ok-http-url? (string->url "ftp://mirror.racket-lang.org/"))
-(ok-http-url? (string->url "somewhere/out-there.html"))
-]}
-
 
 @; ------------------------------------------------------------
 @(close-eval the-eval)

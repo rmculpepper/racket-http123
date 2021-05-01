@@ -16,4 +16,5 @@ and @as-index{http/2} protocols.
 @include-section["header.scrbl"]
 @include-section["response.scrbl"]
 @include-section["exn.scrbl"]
+@include-section["util.scrbl"]
 @include-section["notes.scrbl"]

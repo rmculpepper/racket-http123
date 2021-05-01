@@ -29,8 +29,6 @@
          http-client<%>
          current-response
 
-         in-header-field/c
-         header-field/c
          status-class/c
          response-handler/c
          content-handler/c

@@ -19,6 +19,12 @@
      (->m request? (evt/c (-> any)))]
     ))
 
+(define have-alpn?
+  (let-values ([(req-kws opt-kws) (procedure-keywords ssl-connect)])
+    (and (memq '#:alpn (or opt-kws null)) #t)))
+(unless have-alpn?
+  (log-http-warning "http/2 not available because ssl-connect does not support ALPN"))
+
 (define http-connection%
   (class* object% (#; http-connection<%>)
     (init-field host
@@ -52,7 +58,7 @@
 
     (define/private (open-actual-connection)
       (define try-http1? (memq 'http/1.1 protocols))
-      (define try-http2? (memq 'http/2 protocols))
+      (define try-http2? (and (memq 'http/2 protocols) have-alpn?))
       (log-http-debug "connecting to ~e" (format "~a:~a" host port))
       (cond [(not ssl)
              (define-values (in out)
