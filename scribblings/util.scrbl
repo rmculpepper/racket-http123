@@ -2,7 +2,7 @@
 @(require scribble/example
           racket/runtime-path
           "util.rkt"
-          (for-label racket/base racket/contract racket/class
+          (for-label racket/base racket/contract racket/class net/uri-codec json
                      net/url http123 http123/util/url http123/util/header http123/util/request))
 
 @(begin
@@ -124,40 +124,72 @@ Examples:
 
 @defmodule[http123/util/request]
 
-@defproc[(request/json [method ...]
+@defthing[method/c contract?
+          #:value (or/c 'GET 'HEAD 'POST 'PUT 'DELETE 'OPTIONS 'TRACE 'PATCH)]{
+
+Contract for HTTP methods.
+}
+
+@defproc[(request/json [method method/c]
                        [url (or/c string? url?)]
                        [header (listof in-header-field/c)]
-                       [data jsexpr?]
+                       [json-data jsexpr?]
                        [#:write? write? boolean? #f])
            request?]{
 
+Creates a @tech{request} whose body is the JSON represented by
+@racket[json-data]. A header field of the form @tt{Content-Type:
+application/json} is automatically added to @racket[header].
+
+If @racket[write?] is false, then @racket[json-data] is immediately converted to
+a byte string. Otherwise, the request contains a procedure that writes
+@racket[json-data] on demand.
 }
 
-@defproc[(request/form-urlencoded [method ?]
+@defproc[(request/form-urlencoded [method method/c]
                                   [url (or/c string? url?)]
                                   [header (listof in-header-field/c)]
-                                  [data (listof (cons/c symbol? (or/c #f string?)))])
+                                  [form-data (listof (cons/c symbol? (or/c #f string?)))])
            request?]{
 
-
+Creates a @tech{request} whose body is the encoding of @racket[form-data] using
+@racket[alist->form-urlencoded]. A header field of the form @tt{Content-Type:
+application/x-www-form-urlencoded} is automatically added @racket[header].
 }
         
-@defproc[(request/multipart [method ?]
+@defproc[(request/multipart [method method/c]
                             [url (or/c string? url?)]
                             [header (listof in-header-field/c)]
                             [data (listof (let* ([name/c (or/c string? symbol? bytes?)]
                                                  [value/c (or/c string? bytes? procedure?)]
                                                  [in-header/c (listof in-header-field/c)])
                                             (or/c (list/c name/c value/c)
-                                                  (list/c name/c value/c in-header/c))
-                                                  (list/c name/c value/c in-header/c) '#:filename name/c))]
-                            [#:write? write? boolean? #t])
+                                                  (list/c name/c value/c in-header/c)
+                                                  (list/c name/c value/c in-header/c '#:filename name/c))))])
            request?]{
 
+Creates a @tech{request} whose body is the encoding of @racket[data] following
+the @hyperlink["https://tools.ietf.org/html/rfc7578"]{multipart/form-data}
+encoding rules. A header field of the form @tt{Content-Type:
+multipart/form-data} with a randomly-generated boundary is automatically added
+to @racket[header].
 
-}
+The @racket[data] consists of a list of parts. Each part has one of the
+following forms:
+@itemlist[
 
+@item{@racket[(list _name _value)] --- Consists of a form field name and its
+corresponding value. Example: @racket[(list "language" "en")].}
 
+@item{@racket[(list _name _value _header)] --- Like the previous form, but also
+includes a header that describes this field. Example: @racket[(list "subtotal"
+"€20" '("content-type: text/plain;charset=utf-8"))]}
+
+@item{@racket[(list _name _value _header '#:filename _filename)] --- Like the
+previous form, but indicates that the part corresponds to a file with the given
+@racket[_filename].}
+
+]}
 
 
 @; ----------------------------------------

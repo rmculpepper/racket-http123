@@ -13,7 +13,8 @@
          "../private/io.rkt"
          "../private/header-base.rkt"
          "../private/request.rkt")
-(provide (contract-out
+(provide method/c
+         (contract-out
           [request/json
            (->* [method/c
                  (or/c string? url?)
@@ -28,12 +29,11 @@
                (listof (cons/c symbol? (or/c #f string?)))
                request?)]
           [request/multipart
-           (->* [method/c
-                 (or/c string? url?)
-                 (listof in-header-field/c)
-                 (listof part/c)]
-                [#:write? boolean?]
-                request?)]))
+           (-> method/c
+               (or/c string? url?)
+               (listof in-header-field/c)
+               (listof part/c)
+               request?)]))
 
 (define method/c (apply or/c '(GET HEAD POST PUT DELETE OPTIONS TRACE PATCH)))
 
@@ -50,7 +50,7 @@
                     #:add-header '((#"content-type" #"application/x-www-form-urlencoded"))
                     #:set-data (alist->form-urlencoded form-alist))))
 
-(define (request/multipart method url header parts #:write? [write? #t])
+(define (request/multipart method url header parts)
   (define boundary (base64-encode (crypto-random-bytes 30) #""))
   (request-update  (request method url header #f)
                    #:add-header `((#"content-type"
