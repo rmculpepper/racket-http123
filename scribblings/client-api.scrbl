@@ -246,8 +246,8 @@ This method does not use the client's response and content handlers.
 
 @defparam[current-response resp (or/c #f (is-a?/c response<%>))]{
 
-The @method[http-client<%> handle-response-content] sets this parameter to the
-response being handled for the duration of a call to a content handler.
+The @method[http-client<%> handle-response-content] method sets this parameter
+to the response being handled for the duration of a call to a content handler.
 }
 
 @defthing[response-handler/c contract?
