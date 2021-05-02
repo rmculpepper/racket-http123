@@ -113,8 +113,8 @@
 
 ;; get-decode-mode : Header -> (U 'gzip 'deflate #f)
 (define (get-decode-mode header)
-  (cond [(send header has-value? 'content-encoding #"gzip") 'gzip]
-        [(send header has-value? 'content-encoding #"deflate") 'deflate]
+  (cond [(send header has-value? #"content-encoding" #"gzip") 'gzip]
+        [(send header has-value? #"content-encoding" #"deflate") 'deflate]
         [else #f]))
 
 (define (make-decode-input-wrapper decode-mode decode-in)

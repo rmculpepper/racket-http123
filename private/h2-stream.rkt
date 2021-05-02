@@ -640,18 +640,21 @@
         [(cons (list* #":status" (regexp #rx#"^1") _) _) #t]
         [_ #f]))
 
-    (define/private (make-response-thunk header-entries)
+    (define/private (make-response-thunk header-entries0)
       ;; Create a promise so that work happens in user thread.
+      (define-values (pseudos header-entries) (split-pseudo-header header-entries0))
       (define header-promise (make-header-promise stream header-entries "header"))
       (define resp-promise
         (delay/sync
+         (define status
+           (match (assoc #":status" pseudos)
+             [(list #":status" (and status (regexp #rx#"^[1-5][0-9][0-9]$")))
+              (string->number (bytes->string/latin-1 status))]
+             [_
+              (h2-error "bad or missing status from server"
+                        #:base-info (send stream get-info-for-exn)
+                        #:info (hasheq 'code 'bad-status))]))
          (define header (force header-promise))
-         (unless (send header value-matches? ':status #rx#"[1-5][0-9][0-9]")
-           (h2-error "bad or missing status from server"
-                     #:base-info (send stream get-info-for-exn)
-                     #:info (hasheq 'code 'bad-status 'header header)))
-         (define status (send header get-integer-value ':status))
-         (send header remove! ':status)
          (new http2-response%
               (request req)
               (status-code status)
@@ -660,6 +663,13 @@
               (trailerbxe trailerbxe))))
       (lambda () (force resp-promise)))
     ))
+
+(define (split-pseudo-header entries)
+  (let loop ([acc null] [entries entries])
+    (match entries
+      [(cons (and pseudo (list (regexp #rx#"^:") _)) rest)
+       (loop (cons pseudo acc) rest)]
+      [_ (values acc entries)])))
 
 ;; ------------------------------------------------------------
 

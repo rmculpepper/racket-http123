@@ -60,13 +60,13 @@ entries for that key---that is, values are not combined. The result list
 preserves the order of values for a given key.
 }
 
-@defmethod[(has-key? [key header-key-symbol?]) boolean?]{
+@defmethod[(has-key? [key header-field-key?]) boolean?]{
 
 Returns @racket[#t] if the header contains a field named @racket[key],
 @racket[#f] otherwise.
 }
 
-@defmethod[(get-values [key header-key-symbol?]) (or/c (listof bytes?) #f)]{
+@defmethod[(get-values [key header-field-key?]) (or/c (listof bytes?) #f)]{
 
 Returns the list of field values associated with @racket[key], or @racket[#f] if
 the header does not contain a field named @racket[key].
@@ -75,7 +75,7 @@ The result list contains one element per field line in the original header. That
 is, this method does not perform splitting or combination of field values.
 }
 
-@defmethod[(get-value [key header-key-symbol?]) (or/c bytes? #f)]{
+@defmethod[(get-value [key header-field-key?]) (or/c bytes? #f)]{
 
 Returns the value associated with @racket[key] as a single byte string, or
 @racket[#f] if the header does not contain a field named @racket[key].
@@ -86,7 +86,7 @@ combined by concatenating them separated by @racket[#", "]. Use
 comma-separable values, such as @tt{Set-Cookie}.
 }
 
-@defmethod[(get-integer-value [key header-key-symbol?]) (or/c exact-integer? #f)]{
+@defmethod[(get-integer-value [key header-field-key?]) (or/c exact-integer? #f)]{
 
 Returns the integer value associated with @racket[key]. If @racket[key] has no
 value, or if the value is not a single exact integer, returns @racket[#f]
@@ -94,18 +94,18 @@ instead.
 }
 }
 
-@defproc[(header-key-symbol? [v any/c]) boolean?]{
+@defproc[(header-field-key? [v any/c]) boolean?]{
 
-Returns @racket[#t] if @racket[v] is a symbol that is a valid, canonical header
-field name, @racket[#f] otherwise.
+Returns @racket[#t] if @racket[v] is a byte string that is a valid,
+canonical header field name, @racket[#f] otherwise.
 
 A valid header field name must match the grammar for
-@h11rfc["appendix-B"]{token}; in addition, the symbol form must not have
+@h11rfc["appendix-B"]{token}; in addition, it must not contain any
 upper-case letters.
 
 @examples[#:eval the-eval
-(header-key-symbol? 'content-length)
-(header-key-symbol? 'Content-Length)
+(header-field-key? #"content-length")
+(header-field-key? #"Content-Length")
 ]}
 
 @; ------------------------------------------------------------

@@ -27,6 +27,9 @@
 ;; - field-name - left-hand side -- we use "key" instead
 ;; - field-value - right-hand side
 
+(define (header-field-key? v)
+  (and (bytes? v) (regexp-match-exact? (rx lower-TOKEN) v)))
+
 (define header<%>
   (interface ()
     [get-header-field-list
@@ -34,19 +37,19 @@
     [get-header-lines
      (->m (listof bytes?))]
     [has-key?
-     (->m header-key-symbol? boolean?)]
+     (->m header-field-key? boolean?)]
     [get-values
-     (->m header-key-symbol? (or/c (listof bytes?) #f))]
+     (->m header-field-key? (or/c (listof bytes?) #f))]
     [get-value
-     (->m header-key-symbol? (or/c bytes? #f))]
+     (->m header-field-key? (or/c bytes? #f))]
     [get-ascii-string
-     (->m header-key-symbol? (or/c string? #f))]
+     (->m header-field-key? (or/c string? #f))]
     [get-integer-value
-     (->m header-key-symbol? (or/c exact-integer? #f))]
+     (->m header-field-key? (or/c exact-integer? #f))]
     [has-value?
-     (->m header-key-symbol? bytes? boolean?)]
+     (->m header-field-key? bytes? boolean?)]
     [value-matches?
-     (->*m [header-key-symbol? byte-regexp?] [#:exact? boolean?] boolean?)]
+     (->*m [header-field-key? byte-regexp?] [#:exact? boolean?] boolean?)]
     [get-content-type
      (->m (or/c #f symbol?))]
     ))
@@ -55,21 +58,20 @@
 
 (define header%
   (class* object% (header<%> class-printable<%>)
-    (init-field header-fields)  ;; HeaderFieldList, except temp. allow #":status"
+    (init-field header-fields)  ;; HeaderFieldList
     (super-new)
 
-    (field [table (make-hasheq)])   ;; Hasheq[Symbol => (U Bytes (Listof Bytes))]
-    (let ([list-valued (make-hasheq)])
+    (field [table (make-hash)])   ;; Hasheq[Bytes => (U Bytes (Listof Bytes))]
+    (let ([list-valued (make-hash)])
       (for ([hfield (in-list header-fields)])
         (match-define (list key-bs val-bs) hfield)
-        (define key (header-key->symbol key-bs #t))
-        (cond [(hash-ref table key #f)
+        (cond [(hash-ref table key-bs #f)
                => (lambda (old-v)
                     (define old-v* (if (bytes? old-v) (list old-v) old-v))
                     (define new-v (cons val-bs old-v*))
-                    (hash-set! table key new-v)
-                    (hash-set! list-valued key #t))]
-              [else (hash-set! table key val-bs)]))
+                    (hash-set! table key-bs new-v)
+                    (hash-set! list-valued key-bs #t))]
+              [else (hash-set! table key-bs val-bs)]))
       (for ([k (in-hash-keys list-valued)])
         (hash-set! table k (reverse (hash-ref table k)))))
 
@@ -122,13 +124,12 @@
 
     (define/public (remove! key)
       (hash-remove! table key)
-      (define key-bs (string->bytes/utf-8 (symbol->string key)))
-      (set! header-fields (filter (lambda (e) (not (equal? (car e) key-bs))) header-fields)))
+      (set! header-fields (filter (lambda (e) (not (equal? (car e) key))) header-fields)))
 
     ;; ----
 
     (define/public (get-content-type)
-      (define content-type (or (get-value 'content-type) #""))
+      (define content-type (or (get-value #"content-type") #""))
       (match (regexp-match (rx (rx ^ (record TOKEN) "/" (record TOKEN))) content-type)
         [(list _ type-bs subtype-bs)
          (string->symbol (format "~a/~a" type-bs subtype-bs))]
@@ -168,19 +169,6 @@
 ;; A HeaderEntry is (list Bytes Bytes) | (list Bytes Bytes 'never-add)
 
 ;; make-header-from-entries : (Listof HeaderEntry) -> header%
-;; Allow special #":status" pseudo-header key.
 ;; FIXME: preserve 'never-add ??
 (define (make-header-from-entries entries)
-  (make-header-from-list entries check-header-entry))
-
-;; check-header-entry : Any -> (values HeaderKeyBytes HeaderValueBytes)
-(define (check-header-entry entry)
-  (match entry
-    [(list* #":status" (? bytes? (and #;(regexp #rx#"^[0-9][0-9][0-9]$") value)) _)
-     (list #":status" (bytes->immutable-bytes value))]
-    [(list* (? bytes? (and (regexp (rx^$ lower-TOKEN)) key))
-            (? bytes? (and (regexp (rx^$ FIELD-VALUE)) value))
-            (? (lambda (v) (member v '((never-add) ())))))
-     (list (bytes->immutable-bytes key)
-           (bytes->immutable-bytes value))]
-    [h (h-error "malformed header field entry\n  entry: ~e" h)]))
+  (make-header-from-list entries check-header-field))

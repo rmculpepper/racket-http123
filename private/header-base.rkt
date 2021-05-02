@@ -55,9 +55,9 @@
 ;; HeaderFieldValue = ImmutableBytes            -- matching FIELD-VALUE
 
 (define (header-field-key/c v)
-  (and (bytes? v) (immutable? v) (regexp-match? (rx lower-TOKEN) v)))
+  (and (bytes? v) (immutable? v) (regexp-match-exact? (rx lower-TOKEN) v)))
 (define (header-field-value/c v)
-  (and (bytes? v) (immutable? v) (regexp-match? (rx FIELD-VALUE) v)))
+  (and (bytes? v) (immutable? v) (regexp-match-exact? (rx FIELD-VALUE) v)))
 (define header-field/c (list/c header-field-key/c header-field-value/c))
 
 ;; check-header-field-list : InHeaderFieldList -> HeaderFieldList
@@ -85,7 +85,9 @@
 
 ;; check-header-field-key : InHeaderFieldKey -> HeaderFieldKey
 (define (check-header-field-key key0)
-  (define (imm bs) (bytes->immutable-bytes bs))
+  (define (imm bs)
+    (or (hash-ref-key common-bytes=>symbol bs #f)
+        (bytes->immutable-bytes bs)))
   (let loop ([key key0])
     (match key
       [(? symbol?) (loop (symbol->string key))]
@@ -132,6 +134,7 @@
        (or (and (common-symbol->bytes v) #t)
            (header-key-name? (symbol->immutable-string v)))))
 
+#;
 ;; header-key->symbol : HeaderKey -> Symbol, or #f if fail-ok?
 (define (header-key->symbol key [fail-ok? #f])
   (cond [(hash-ref common-bytes=>symbol key #f) => values]
@@ -281,16 +284,6 @@
 
 ;; ============================================================
 ;; Reserved header field keys
-
-(define reserved-header-keys
-  '(host
-    content-length
-    connection
-    keep-alive
-    upgrade
-    transfer-encoding
-    te
-    trailer))
 
 (define reserved-header-keys/bytes
   '(#"host"

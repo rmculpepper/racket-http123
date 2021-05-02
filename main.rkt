@@ -21,10 +21,9 @@
          request-url
          request-header
          request-data
-         ok-http-url?
          response<%>
          header<%>
-         header-key-symbol?
+         header-field-key?
          http-client-base<%>
          http-client<%>
          current-response

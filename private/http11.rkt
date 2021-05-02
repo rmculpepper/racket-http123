@@ -298,7 +298,7 @@
       (define close?
         (or ;; FIXME: if we requested Connection: close
             ;; FIXME: more robust value comparison
-            (send header has-value? 'connection #"close")))
+            (send header has-value? #"connection" #"close")))
       (define (make-resp content trailersbxe)
         (new http11-response%
              (request req)
@@ -332,10 +332,10 @@
             [else (cons next (read-raw-header))]))
 
     (define/private (check-header method no-content? header)
-      (when (send header has-key? 'content-length)
-        (send header check-value 'content-length bytes->nat "nonnegative integer"))
-      (when (send header has-key? 'transfer-encoding)
-        (send header check-value 'transfer-encoding
+      (when (send header has-key? #"content-length")
+        (send header check-value #"content-length" bytes->nat "nonnegative integer"))
+      (when (send header has-key? #"transfer-encoding")
+        (send header check-value #"transfer-encoding"
               (lambda (b) (equal? b #"chunked"))
               (format "~s" #"chunked")))
       ;; FIXME: others?
@@ -348,10 +348,10 @@
     (define/private (make-content-pump header)
       (cond
         ;; Reference: https://tools.ietf.org/html/rfc7230, Section 3.3.3 (Message Body Length)
-        [(send header has-value? 'transfer-encoding #"chunked") ;; Case 3
+        [(send header has-value? #"transfer-encoding" #"chunked") ;; Case 3
          (log-http1-debug "reading content (Transfer-Encoding: chunked)")
          (make-pump/chunked br)]
-        [(send header get-integer-value 'content-length) ;; Case 5
+        [(send header get-integer-value #"content-length") ;; Case 5
          => (lambda (len)
               (log-http1-debug "reading content (Content-Length: ~a)" len)
               (cond [(< len CONTENT-LENGTH-READ-NOW)
