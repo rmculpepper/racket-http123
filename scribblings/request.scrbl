@@ -4,7 +4,7 @@
           racket/runtime-path
           "util.rkt"
           (for-label racket/base racket/contract racket/class net/url
-                     http123 http123/util/url http123/util/header))
+                     http123 http123/util/request http123/util/url http123/util/header))
 
 @(begin
   (define-runtime-path log-file "log-request.rktd")
@@ -16,18 +16,27 @@
 @; ------------------------------------------------------------
 @title[#:tag "request"]{Requests}
 
+@deftogether[[
 @defstruct*[request
-            ([method (or/c 'GET 'HEAD 'POST 'PUT 'DELETE 'OPTIONS 'TRACE 'PATCH)]
-             [url (or/c string? ok-http-url?)]
-             [header (listof in-header-field/c)]
-             [data (or/c #f bytes? (-> output-port? any))])]{
+            ([method method/c]
+             [url ok-http-url?]
+             [header (listof header-field/c)]
+             [data (or/c #f bytes? (-> output-port? any))])]
+@defproc[#:link-target? #f
+         (request [method method/c]
+                  [url (or/c string? ok-http-url?)]
+                  [header (listof in-header-field/c) null]
+                  [data (or/c #f bytes? (-> output-port? any)) #f])
+         request?]
+]]{
 
-Represents an HTTP @deftech{request}.
+Represents an HTTP @deftech{request}. The constructor accepts a wider range of
+inputs and converts them to acceptable field values as described below.
 
 The @racket[method] field indicates the @rfc7231["section-4"]{request
 method}. Only the methods listed in the contract above are currently allowed.
 
-The @racketidfont{url} field contains the @h11rfc["section-5.3"]{request
+The @racket[url] field contains the @h11rfc["section-5.3"]{request
 target}. It must be given in absolute form (see the notes below about checks and
 conversions performed by the constructor).
 
@@ -69,7 +78,7 @@ The constructor checks and converts its arguments according to the following
 rules:
 @itemlist[
 
-@item{If @racketidfont{url} is a string, it is converted to a URL struct
+@item{If @racket[url] is a string, it is converted to a URL struct
 (@racket[url?]). The URL must satisfy the constraints of @racket[ok-http-url?];
 otherwise, an error is raised.}
 
