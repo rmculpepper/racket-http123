@@ -6,6 +6,7 @@
          racket/contract/base
          racket/match
          file/gunzip
+         scramble/class
          "interfaces.rkt"
          "request.rkt"
          "io.rkt"
@@ -16,7 +17,7 @@
 ;; - record headers actually sent, including UA-synthesized (eg, Host)
 
 (define response<%>
-  (interface* () ([prop:about (lambda (self) (send self about))])
+  (interface (about<%>)
     [get-version
      (->m symbol?)]
     [get-request
@@ -48,7 +49,7 @@
 ;; ------------------------------------------------------------
 
 (define http-response%
-  (class* object% (response<%> class-printable<%>)
+  (class* object% (response<%> constructor-style-printable<%>)
     (init-field request         ;; Request
                 status-code     ;; Nat
                 header          ;; header%
@@ -89,7 +90,7 @@
 
     ;; ----
 
-    (define/public (get-printing-classname)
+    (define/public (get-printing-class-name)
       'http-response%)
     (define/public (get-printing-components)
       (values '(status-code header) (list status-code header) #t))
@@ -148,14 +149,14 @@
 
     (define/override (get-version) 'http/1.1)
     (define/public (get-status-line) status-line)
-    (define/override (get-printing-classname) 'http11-response%)
+    (define/override (get-printing-class-name) 'http11-response%)
     ))
 
 (define http2-response%
   (class* decoding-response% ()
     (super-new)
     (define/override (get-version) 'http/2)
-    (define/override (get-printing-classname) 'http2-response%)
+    (define/override (get-printing-class-name) 'http2-response%)
     ))
 
 ;; ============================================================

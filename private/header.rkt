@@ -5,6 +5,7 @@
 (require racket/class
          racket/contract/base
          racket/match
+         scramble/class
          "interfaces.rkt"
          "regexp.rkt"
          "header-base.rkt"
@@ -57,7 +58,7 @@
 ;; ----------------------------------------
 
 (define header%
-  (class* object% (header<%> class-printable<%>)
+  (class* object% (header<%> constructor-style-printable<%>)
     (init-field header-fields)  ;; HeaderFieldList
     (super-new)
 
@@ -137,7 +138,7 @@
 
     ;; ----
 
-    (define/public (get-printing-classname)
+    (define/public (get-printing-class-name)
       'header%)
     (define/public (get-printing-components)
       (values '(header-fields) (list header-fields) #f))

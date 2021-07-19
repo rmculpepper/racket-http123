@@ -5,6 +5,7 @@
 (require (for-syntax racket/base syntax/transformer)
          racket/match
          net/url-structs
+         scramble/about
          "interfaces.rkt"
          "header-base.rkt"
          "util.rkt")
