@@ -271,9 +271,7 @@
 #;
 (begin (define req (request 'GET "https://www.google.com/"))
        (define req1 (request 'GET "http://www.neverssl.com/"))
-       (define c0 (new http-client%))
+       (define c0 (http-client))
        (require racket/port net/cookies/user-agent)
        (define c (send c0 fork #:add-content-handlers `([text/html ,port->string])
                        #:add-cookie-jar (current-cookie-jar))))
-
-;; FIXME: beware empty paths: (GET "https://www.google.com") fails!
