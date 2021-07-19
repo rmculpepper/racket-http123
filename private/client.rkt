@@ -14,7 +14,6 @@
          "request.rkt"
          "response.rkt"
          "connection.rkt"
-         "client-base.rkt"
          (submod "util.rkt" url))
 (provide (all-defined-out))
 

@@ -38,9 +38,7 @@
 ;; - Reads are done in a separate reader thread.
 (define http11-actual-connection%
   (class* object% (#; http-connection<%>)
-    (init-field parent in out [try-upgrade? #t])
-
-    ;; FIXME: implement try-upgrade?
+    (init-field parent in out)
 
     (super-new)
 
