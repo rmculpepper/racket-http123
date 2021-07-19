@@ -14,6 +14,10 @@
 @; ------------------------------------------------------------
 @title[#:tag "intro"]{Introduction to http123}
 
+This library's @racket[http-client<%>] objects support two styles of
+usage: a high-level handler-based interface and a low-level
+response-based interface.
+
 @section[#:tag "client-intro"]{Using the Handler API}
 
 This section introduces the high-level, handlers-based client API.

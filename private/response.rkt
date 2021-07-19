@@ -93,7 +93,7 @@
     (define/public (get-printing-class-name)
       'http-response%)
     (define/public (get-printing-components)
-      (values '(status-code header) (list status-code header) #t))
+      (values '(status-code request header) (list status-code request header) #t))
     (define/public (about)
       (format "~a response with ~a body"
               status-code
