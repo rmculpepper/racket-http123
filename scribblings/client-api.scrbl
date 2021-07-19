@@ -116,8 +116,8 @@ handler. The request adjuster adds @tt{Cookie} fields to the request header; the
 response listener scans the response for @tt{Set-Cookie} fields and adds them to
 @racket[cookie-jar]. (Beware, the default @racket[list-cookie-jar%]
 implementation is not thread-safe. Access to @racket[cookie-jar] is synchronized
-for @(this-obj) and derived clients, but not for other clients that
-@racket[cookie-jar] is added to separately.)
+for @(this-obj) and derived clients, but not for other clients that access
+@racket[cookie-jar].)
 }
 
 @defmethod[(handle [req request?])

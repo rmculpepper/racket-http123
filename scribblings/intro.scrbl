@@ -14,7 +14,7 @@
 @; ------------------------------------------------------------
 @title[#:tag "intro"]{Introduction to http123}
 
-@section[#:tag "client-intro"]{Using the Client API}
+@section[#:tag "client-intro"]{Using the Handler API}
 
 This section introduces the high-level, handlers-based client API.
 
@@ -144,10 +144,10 @@ Once read, content data is gone forever!
 ]
 
 Using @method[http-client<%> async-request] it is possible to submit
-send requests and receive responses as they arrive. In particular, in
-http/2 connections responses may arrive in an order different from the
-order the requests were sent. Of course, responses using different
-connections are always unordered.
+send requests and receive responses as they arrive. In particular,
+with an http/2 connection, responses may arrive in an order different
+from the order the requests were sent. Of course, responses using
+different connections are always unordered.
 
 The event returned by @method[http-client<%> async-request] produces a
 thunk as its synchronization result; apply the thunk to get the
