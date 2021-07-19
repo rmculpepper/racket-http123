@@ -36,16 +36,11 @@
 ;; ============================================================
 ;; Exceptions
 
-;; Use exn:fail:http123 only for HTTP-related errors.
-;; Eg, don't use for malformed header key (but maybe catch and wrap
-;; with "during header processing" http123 exn).
-
 ;; info : Hash[Symbol => Any], with the following common keys:
 ;; - 'version  : 'http/1.1 | 'http/2    -- protocol version
 ;; - 'request  : Request                -- if regarding request
-;; - 'received : 'no | 'unknown | 'yes  -- was request processed?
+;; - 'received : 'no | 'unknown | 'yes  -- did server see request?
 ;; - 'code     : Symbol                 -- descriptive symbol
-;; - 'where    : (listof Symbol)        -- entrypoint list
 ;; - 'wrapped-exn : Exn or Any          -- underlying exn
 (struct exn:fail:http123 exn:fail (info))
 
