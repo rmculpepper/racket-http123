@@ -212,6 +212,10 @@
         (cond [new-req (handle new-req #:aux-info new-aux)]
               [else (fail)])))
 
+    (define/private (effective-url base-url loc)
+      ;; FIXME: resolve relative to base-url
+      (check-http-url 'handle-redirection loc))
+
     (define/public (status-code->redirection-type code)
       (case code
         [(301 302) 'POST->GET]
