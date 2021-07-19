@@ -10,7 +10,7 @@
          json
          net/uri-codec
          "../private/interfaces.rkt"
-         "../private/io.rkt"
+         (submod "../private/util.rkt" port)
          "../private/header-base.rkt"
          "../private/request.rkt")
 (provide method/c

@@ -9,8 +9,9 @@
          "interfaces.rkt"
          "header.rkt"
          "regexp.rkt"
-         "io.rkt"
-         "util.rkt"
+         (submod "util.rkt" port)
+         (submod "util.rkt" url)
+         (submod "util.rkt" evt)
          "request.rkt"
          "response.rkt")
 (provide (all-defined-out))

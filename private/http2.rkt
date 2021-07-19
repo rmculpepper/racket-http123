@@ -6,7 +6,7 @@
          racket/match
          binaryio/reader
          "interfaces.rkt"
-         "io.rkt"
+         (submod "util.rkt" evt)
          "hpack.rkt"
          "h2-frame.rkt"
          "h2-stream.rkt")

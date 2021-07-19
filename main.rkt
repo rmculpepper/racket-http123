@@ -12,8 +12,7 @@
          "private/header.rkt"
          "private/response.rkt"
          "private/client-base.rkt"
-         "private/client.rkt"
-         "private/util.rkt")
+         "private/client.rkt")
 (provide (struct-out exn:fail:http123)
          request
          request?

@@ -11,7 +11,7 @@
          "private/response.rkt"
          "private/http11.rkt"
          "private/request.rkt"
-         (prefix-in util: "private/util.rkt"))
+         (prefix-in util: (submod "private/util.rkt" url)))
 
 (define (make-server responses server-in server-out)
   (thread

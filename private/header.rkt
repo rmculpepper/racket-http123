@@ -9,7 +9,7 @@
          "interfaces.rkt"
          "regexp.rkt"
          "header-base.rkt"
-         "util.rkt")
+         (submod "util.rkt" ascii))
 (provide (all-defined-out)
          (all-from-out "header-base.rkt"))
 

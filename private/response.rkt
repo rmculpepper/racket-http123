@@ -9,7 +9,7 @@
          scramble/class
          "interfaces.rkt"
          "request.rkt"
-         "io.rkt"
+         (submod "util.rkt" port)
          "header.rkt")
 (provide (all-defined-out))
 

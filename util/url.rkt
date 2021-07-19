@@ -8,7 +8,7 @@
          net/uri-codec
          net/url-structs
          net/url-string
-         "../private/util.rkt")
+         (submod "../private/util.rkt" url))
 (provide ok-http-url?
          (contract-out
           [build-url

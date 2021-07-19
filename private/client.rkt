@@ -15,7 +15,7 @@
          "response.rkt"
          "connection.rkt"
          "client-base.rkt"
-         "util.rkt")
+         (submod "util.rkt" url))
 (provide (all-defined-out))
 
 (define default-base-header

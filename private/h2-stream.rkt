@@ -9,7 +9,8 @@
          "interfaces.rkt"
          "header.rkt"
          "response.rkt"
-         "io.rkt"
+         (submod "util.rkt" port)
+         (submod "util.rkt" evt)
          "request.rkt"
          "h2-frame.rkt"
          "hpack.rkt")

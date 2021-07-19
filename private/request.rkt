@@ -8,7 +8,7 @@
          scramble/about
          "interfaces.rkt"
          "header-base.rkt"
-         "util.rkt")
+         (submod "util.rkt" url))
 (provide (except-out (all-defined-out) request)
          (rename-out [request* request]))
 
