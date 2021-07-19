@@ -147,8 +147,13 @@
 ;; make-header-promise:
 (define (new-dt) (make-dtable 4096))
 (define (mkheaders hs) (fp:headers #f #f #f (encode-header hs (new-dt))))
-(test1e (list #rx"error processing header")
+
+(test1e (list #rx"bad or missing status from server")
         (list (frame type:HEADERS flag:END_HEADERS 3 (mkheaders '((#"bad key" #"value"))))))
+
+(test1e (list #rx"error processing header")
+        (list (frame type:HEADERS flag:END_HEADERS 3
+                     (mkheaders '((#":status" #"200") (#"bad key" #"value"))))))
 
 ;; pstate-base% bad-tx:
 (test1e (list #rx"unexpected DATA frame from server"

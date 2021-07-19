@@ -20,9 +20,9 @@
   ;; if who is #f, resets to empty
   (with-continuation-mark who-mark who (begin0 (let () body ...) (void))))
 
-(define (http123-who [default-who 'http123])
+(define (http123-who [default-who #f])
   (define eps (continuation-mark-set->list (current-continuation-marks) who-mark))
-  (let loop ([eps eps] [default default-who])
+  (let loop ([eps eps] [default (or default-who 'http123)])
     (cond [(null? eps) default]
           [(eq? (car eps) #f) default]
           [else (loop (cdr eps) (car eps))])))
