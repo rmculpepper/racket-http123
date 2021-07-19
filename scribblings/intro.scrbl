@@ -123,8 +123,8 @@ response:
 (eval:alts
  @#,elem{@racket[(code:comment "... prune away some header fields ...")]}
  (begin (let ([h (send resp get-header)])
-          (send h remove! 'alt-svc)
-          (send h remove! 'set-cookie))))
+          (send h remove! #"alt-svc")
+          (send h remove! #"set-cookie"))))
 (eval:alts
  resp
  (pretty (call-with-output-string
@@ -164,8 +164,8 @@ response. (See @secref["evt-result"] for rationale.)
  ((sync ietf-evt google-evt))
  (let ([resp ((sync ietf-evt google-evt))])
    (define h (send resp get-header))
-   (send h remove! 'alt-svc)
-   (send h remove! 'set-cookie)
+   (send h remove! #"alt-svc")
+   (send h remove! #"set-cookie")
    (pretty (call-with-output-string
             (lambda (out) (pretty-print resp out))))))
 ]

@@ -35,6 +35,7 @@
           [http-client
            (->* []
                 [#:ssl (or/c 'secure 'auto ssl-client-context?)
+                 #:add-header in-header/c
                  #:add-response-handlers (listof response-handler-entry/c)
                  #:add-content-handlers (listof content-handler-entry/c)
                  #:add-request-adjuster (or/c #f (-> request? request?))

@@ -34,9 +34,9 @@
    (h
     -
     ()
-    (time u . "02:37:37 PM")
-    (date u . "04-29-2021")
-    (milliseconds_since_epoch . 1619707057425))))
+    (time u . "07:19:32 PM")
+    (date u . "07-19-2021")
+    (milliseconds_since_epoch . 1626722372856))))
  #""
  #"")
 ((send client handle (request 'GET "https://tools.ietf.org/rfc/rfc7540.txt"))
@@ -149,8 +149,8 @@
  #"")
 ((begin
    (let ((h (send resp get-header)))
-     (send h remove! 'alt-svc)
-     (send h remove! 'set-cookie)))
+     (send h remove! #"alt-svc")
+     (send h remove! #"set-cookie")))
  ((3) 0 () 0 () () (c values c (void)))
  #""
  #"")
@@ -169,7 +169,7 @@
    (0
     (u
      .
-     "(new http2-response%\n (status-code 200)\n (header\n  (new header%\n   (header-fields\n    '((#\"date\" #\"Thu, 29 Apr 2021 14:37:43 GMT\")\n      (#\"expires\" #\"-1\")\n      (#\"cache-control\" #\"private, max-age=0\")\n      (#\"content-type\" #\"text/html; charset=ISO-8859-1\")\n      (#\"p3p\"\n       #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n      (#\"content-encoding\" #\"gzip\")\n      (#\"server\" #\"gws\")\n      (#\"content-length\" #\"6225\")\n      (#\"x-xss-protection\" #\"0\")\n      (#\"x-frame-options\" #\"SAMEORIGIN\")))))\n ...)\n"))))
+     "(new http2-response%\n (status-code 200)\n (header\n  (new header%\n   (header-fields\n    '((#\"date\" #\"Mon, 19 Jul 2021 19:19:39 GMT\")\n      (#\"expires\" #\"-1\")\n      (#\"cache-control\" #\"private, max-age=0\")\n      (#\"content-type\" #\"text/html; charset=ISO-8859-1\")\n      (#\"p3p\"\n       #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n      (#\"content-encoding\" #\"gzip\")\n      (#\"server\" #\"gws\")\n      (#\"content-length\" #\"6150\")\n      (#\"x-xss-protection\" #\"0\")\n      (#\"x-frame-options\" #\"SAMEORIGIN\")))))\n ...)\n"))))
  #""
  #"")
 ((send resp get-status-code) ((3) 0 () 0 () () (q values 200)) #"" #"")
@@ -194,8 +194,8 @@
  #"")
 ((let ((resp ((sync ietf-evt google-evt))))
    (define h (send resp get-header))
-   (send h remove! 'alt-svc)
-   (send h remove! 'set-cookie)
+   (send h remove! #"alt-svc")
+   (send h remove! #"set-cookie")
    (pretty (call-with-output-string (lambda (out) (pretty-print resp out)))))
  ((3)
   1
@@ -211,6 +211,6 @@
    (0
     (u
      .
-     "(new http2-response%\n (status-code 200)\n (header\n  (new header%\n   (header-fields\n    '((#\"date\" #\"Thu, 29 Apr 2021 14:37:45 GMT\")\n      (#\"expires\" #\"-1\")\n      (#\"cache-control\" #\"private, max-age=0\")\n      (#\"content-type\" #\"text/html; charset=ISO-8859-1\")\n      (#\"p3p\"\n       #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n      (#\"content-encoding\" #\"gzip\")\n      (#\"server\" #\"gws\")\n      (#\"content-length\" #\"5973\")\n      (#\"x-xss-protection\" #\"0\")\n      (#\"x-frame-options\" #\"SAMEORIGIN\")))))\n ...)\n"))))
+     "(new http2-response%\n (status-code 200)\n (header\n  (new header%\n   (header-fields\n    '((#\"date\" #\"Mon, 19 Jul 2021 19:19:40 GMT\")\n      (#\"expires\" #\"-1\")\n      (#\"cache-control\" #\"private, max-age=0\")\n      (#\"content-type\" #\"text/html; charset=ISO-8859-1\")\n      (#\"p3p\"\n       #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n      (#\"content-encoding\" #\"gzip\")\n      (#\"server\" #\"gws\")\n      (#\"content-length\" #\"5864\")\n      (#\"x-xss-protection\" #\"0\")\n      (#\"x-frame-options\" #\"SAMEORIGIN\")))))\n ...)\n"))))
  #""
  #"")

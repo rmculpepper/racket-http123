@@ -42,7 +42,8 @@ are collapsed unless doing so would delete parameters, and empty path segments
 are removed except that an empty segment is allowed at the end of the path. (An
 empty segment at the end corresponds to a URL written with a final @litchar{/}.)
 
-The @racket[query] is appended to the end of @racket[base]'s existing query arguments.
+The @racket[query] is appended to the end of @racket[base-url]'s existing query
+arguments.
 }
 
 @defproc[(ok-http-url? [v any/c]) boolean?]{
