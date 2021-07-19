@@ -16,6 +16,8 @@
 ;; FIXME/TODO:
 ;; - record headers actually sent, including UA-synthesized (eg, Host)
 
+(define aux-info/c (and/c hash? hash-eq? immutable? (not/c impersonator?)))
+
 (define response<%>
   (interface (about<%>)
     [get-version
@@ -42,8 +44,8 @@
      (->m string?)]
     [aux-info
      (case->m
-      (-> (and/c hash? hash-eq? immutable?))
-      (-> (and/c hash? hash-eq? immutable?) void?))]
+      (-> aux-info/c)
+      (-> aux-info/c void?))]
     ))
 
 ;; ------------------------------------------------------------

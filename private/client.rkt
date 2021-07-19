@@ -21,6 +21,8 @@
   '((#"accept-encoding" #"gzip, deflate")
     (#"user-agent" #"racket-http123/0.1")))
 
+(define REDIRECT-LIMIT 5)
+
 ;; ============================================================
 
 (define response/c (is-a?/c response<%>))
@@ -56,7 +58,9 @@
             #:add-cookie-jar (or/c #f (is-a?/c cookie-jar<%>))]
            any)]
     [handle
-     (->m request? any)]
+     (->*m [request?]
+           [#:aux-info aux-info/c]
+           any)]
     ;; ----
     [adjust-request
      (->m request? request?)]
@@ -178,13 +182,14 @@
     ;; without more consideration. Maybe reset to null, maybe add
     ;; opt-in list of fields to copy?
 
-    (define REDIRECT-LIMIT 5)
     (define/public (handle-redirection resp
+                                       #:limit [limit REDIRECT-LIMIT]
                                        #:redirect-type [redirect-type #f]
-                                       #:fail [fail (lambda () (unhandled-response resp))])
+                                       #:fail [fail (lambda () (unhandled-redirection resp))])
       (with-entry-point 'handle-redirection
         ;; Note: Don't reuse request header for different domain!
         (match-define (request req-method req-url _ req-data) (send resp get-request))
+        (send resp close-content-in)
         (define h (send resp get-header))
         (define aux (send resp aux-info))
         (define redirected-from
@@ -193,7 +198,7 @@
         (define new-aux (hash-set aux '_redirected-from redirected-from))
         (define loc (send h get-ascii-value #"location"))
         (define new-req
-          (cond [(and loc (< (length redirected-from) REDIRECT-LIMIT))
+          (cond [(and loc (<= (length redirected-from) limit))
                  (define u (effective-url req-url loc))
                  (case (or redirect-type
                            (status-code->redirection-type (send resp get-status-code)))
@@ -204,7 +209,7 @@
                    [(all->GET) ;; change method to GET, always (except HEAD?)
                     (define new-method (case req-method [(HEAD) 'HEAD] [else 'GET]))
                     (request new-method u null #f)]
-                   [(keep-method) ;; must keep original method
+                   [(same-method) ;; must keep original method
                     (request req-method u null req-data)]
                    [else #f])]
                 [else #f]))
@@ -219,8 +224,14 @@
       (case code
         [(301 302) 'POST->GET]
         [(303) 'all->GET]
-        [(307 308) 'keep-method]
+        [(307 308) 'same-method]
         [else #f]))
+
+    (define/private (unhandled-redirection resp)
+      (h-error "unable to automatically handle redirection"
+               #:info (hasheq 'code 'unhandled-redirection
+                              'received 'yes
+                              'response resp)))
 
     ;; ----------------------------------------
 

@@ -120,7 +120,8 @@ for @(this-obj) and derived clients, but not for other clients that access
 @racket[cookie-jar].)
 }
 
-@defmethod[(handle [req request?])
+@defmethod[(handle [req request?]
+                   [#:aux-info aux-info (and/c hash? hash-eq? immutable?) '#hasheq()])
            any]{
 
 Adjusts @racket[req] using the client's default header fields and adjusters (see
@@ -129,12 +130,18 @@ response listeners, and handles the response according to the client's response
 and content handlers (see @method[http-client<%> handle-response] and
 @method[http-client<%> handle-response-content]).
 
+The @racket[aux-info] hash is included in the response. Symbols starting with an
+underscore (@litchar{_}) are reserved for use as keys by this library---for
+example, @method[http-client<%> handle-redirection] uses the
+@racket['@#,racketvalfont{_redirected-from}] key.
+
 The result is the result of the selected response handler.
 
 Equivalent to
 @racketblock[
-(send @#,(this-obj) @#,method[http-client<%> handle-response]
-      (send @#,(this-obj) @#,method[http-client<%> sync-request] req))
+(let ([resp (send @#,(this-obj) @#,method[http-client<%> sync-request] req)])
+  (send resp @#,method[response<%> aux-info] aux-info)
+  (send @#,(this-obj) @#,method[http-client<%> handle-response]))
 ]}
 
 @defmethod[(adjust-request [req request?]) request?]{
@@ -205,6 +212,52 @@ If a handler is selected, it is called with @racket[(send resp
 The default content handler closes @racket[resp]'s content input port and raises
 an exception.
 }
+
+@defmethod[(handle-redirection [resp (is-a?/c response<%>)]
+                               [#:limit limit exact-nonnegative-integer? 5]
+                               [#:fail fail (-> any) (lambda () (error ....))])
+           any]{
+
+Automatically handles a Redirection (3xx) response according to the following
+rules:
+
+@itemlist[
+
+@item{If @racket[resp] does not have a @tt{Location} header field, or
+if the location is not a valid URL, then the handler fails.}
+
+@item{If there have already been @racket[limit] or more redirections
+from the original request (as determined by the
+@racket['@#,racketvalfont{_redirected-from}] key of @racket[(send resp
+@#,method[response<%> aux-info])]), then the handler fails.}
+
+@item{If @racket[resp]'s status code is 301 or 302, then a new request
+is made for the redirection location. If the previous method was
+@racket['POST], then the new method is @racket['GET]; otherwise, the
+new method is the same as the previous method.}
+
+@item{If @racket[resp]'s status code is 303, then a new request is
+made for the redirection location. If the previous method was
+@racket['HEAD], then the new method is @racket['HEAD]; otherwise, the
+new method is @racket['GET].}
+
+@item{If @racket[resp]'s status code is 307 or 308, then a new request
+is made for the redirection location. The new method is the same as
+the previous method.}
+
+@item{Otherwise (for example, other status codes), the handler fails.}
+
+]
+
+If the handler retries with a new location, it pushes @racket[resp]
+onto the @racket['@#,racketvalfont{_redirected-from}] auxiliary info value.
+
+If the handler fails, it calls @racket[fail]. The default @racket[fail] value
+raises an exception.
+}
+
+
+@; ----------------------------------------
 
 @defmethod[(sync-request [req request?]) (is-a?/c response<%>)]{
 

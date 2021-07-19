@@ -108,6 +108,12 @@ trailer if there was one, returns @racket[#f] if there was no trailer, or raises
 an exception if there was an error reading the response. See also
 @secref["evt-result"].
 }
+
+@defmethod*[([(aux-info) (and/c hash? hash-eq? immutable?)]
+             [(aux-info [info (and/c hash? hash-eq? immutable?)]) void?])]{
+
+Gets or sets the response's auxiliary info. See @method[http-client<%> handle].
+}
 }
 
 @defthing[status-class/c contract?
