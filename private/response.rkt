@@ -39,6 +39,10 @@
      (->m (evt/c (-> (or/c #f (is-a?/c header<%>)))))]
     [about
      (->m string?)]
+    [aux-info
+     (case->m
+      (-> (and/c hash? hash-eq? immutable?))
+      (-> (and/c hash? hash-eq? immutable?) void?))]
     ))
 
 ;; ------------------------------------------------------------
@@ -50,6 +54,7 @@
                 header          ;; header%
                 trailerbxe)     ;; (Evt (-> (or/c #f header%)))
     (init ((init-content content))) ;; #f or Bytes or InputPort
+    (field [aux #hasheq()])      ;; Hasheq[Any => Any]
     (super-new)
 
     ;; content-in : #f or InputPort
@@ -76,6 +81,11 @@
       (or trailerbxe const-false-evt))
     (define/public (get-trailer)
       (and trailerbxe ((sync trailerbxe))))
+
+    (define/public aux-info
+      (case-lambda
+        [() aux]
+        [(new-aux) (set! aux new-aux)]))
 
     ;; ----
 

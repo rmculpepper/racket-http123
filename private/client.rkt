@@ -117,8 +117,10 @@
                   ([adj (in-list request-adjusters)])
           (adj req))))
 
-    (define/public (handle req)
+    (define/public (handle req #:aux-info [aux '#hasheq()])
       (with-entry-point 'handle
+        (define resp (sync-request req))
+        (send resp aux-info aux)
         (handle-response (sync-request req))))
 
     (define/public (handle-response resp)
@@ -170,6 +172,52 @@
                #:info (hasheq 'code 'unhandled-content
                               'received 'yes
                               'response resp)))
+
+    ;; ----------------------------------------
+
+    ;; FIXME: MUST NOT reuse request header for different domain
+    ;; without more consideration. Maybe reset to null, maybe add
+    ;; opt-in list of fields to copy?
+
+    (define REDIRECT-LIMIT 5)
+    (define/public (handle-redirection resp
+                                       #:redirect-type [redirect-type #f]
+                                       #:fail [fail (lambda () (unhandled-response resp))])
+      (with-entry-point 'handle-redirection
+        ;; Note: Don't reuse request header for different domain!
+        (match-define (request req-method req-url _ req-data) (send resp get-request))
+        (define h (send resp get-header))
+        (define aux (send resp aux-info))
+        (define redirected-from
+          (let ([rs (hash-ref aux '_redirected-from null)])
+            (cons resp (if (list? rs) rs (list rs)))))
+        (define new-aux (hash-set aux '_redirected-from redirected-from))
+        (define loc (send h get-ascii-value #"location"))
+        (define new-req
+          (cond [(and loc (< (length redirected-from) REDIRECT-LIMIT))
+                 (define u (effective-url req-url loc))
+                 (case (or redirect-type
+                           (status-code->redirection-type (send resp get-status-code)))
+                   [(POST->GET) ;; if POST, change to GET and drop data; else, unchanged
+                    (case req-method
+                      [(POST) (request 'GET u null #f)]
+                      [else (request req-method u null req-data)])]
+                   [(all->GET) ;; change method to GET, always (except HEAD?)
+                    (define new-method (case req-method [(HEAD) 'HEAD] [else 'GET]))
+                    (request new-method u null #f)]
+                   [(keep-method) ;; must keep original method
+                    (request req-method u null req-data)]
+                   [else #f])]
+                [else #f]))
+        (cond [new-req (handle new-req #:aux-info new-aux)]
+              [else (fail)])))
+
+    (define/public (status-code->redirection-type code)
+      (case code
+        [(301 302) 'POST->GET]
+        [(303) 'all->GET]
+        [(307 308) 'keep-method]
+        [else #f]))
 
     ;; ----------------------------------------
 
