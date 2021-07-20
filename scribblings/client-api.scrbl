@@ -37,10 +37,10 @@ The client automatically creates connections as necessary based on
 request URLs. For @tt{https} requests, the client attempts to
 negotiate an http/2 connection using ALPN; if the server does not
 agree to http/2, the client falls back to http/1.1. For @tt{http}
-requests, only http/1.1 is supported.
-
-Connections created by the client are automatically closed after a
-few seconds of inactivity.
+requests, only http/1.1 is supported. The client remembers the value of
+@racket[(current-custodian)] and uses that custodian when creating
+connections. Connections are automatically closed after a few seconds of
+inactivity.
 
 The @racket[ssl] argument determines the client context used by
 @racket[ssl-connect] when making @tt{https} connections.
@@ -87,9 +87,9 @@ list of response handlers, and a list of content handlers (see
                   #f])
            (is-a?/c http-client<%>)]{
 
-Creates a new client object that shares the same connection manager as
-@(this-obj), but adds the given header fields and handlers. The new header
-fields and handlers take precedence over the existing header fields and
+Creates a new client object that shares the same connection manager and
+custodian as @(this-obj), but adds the given header fields and handlers. The new
+header fields and handlers take precedence over the existing header fields and
 handlers. More precisely:
 @itemlist[
 

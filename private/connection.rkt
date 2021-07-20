@@ -37,7 +37,8 @@
     (init-field host
                 port
                 ssl
-                [protocols '(http/2 http/1.1)])
+                [protocols '(http/2 http/1.1)]
+                [custodian (current-custodian)])
     (super-new)
 
     (define/public (get-host) host)
@@ -58,7 +59,8 @@
                (let ([c (with-handlers ([exn? (lambda (e)
                                                 (semaphore-post lock)
                                                 (raise e))])
-                          (open-actual-connection))])
+                          (parameterize ((current-custodian custodian))
+                            (open-actual-connection)))])
                  (log-http-debug "created new actual connection")
                  (begin (set! conn c) c))]
               [else #f])))
@@ -162,7 +164,8 @@
 
 (define connection-manager%
   (class* object% ()
-    (init-field [ssl 'secure])
+    (init-field [ssl 'secure]
+                [custodian (current-custodian)])
     (super-new)
 
     ;; connections : Hash[(list String Nat Boolean) => Connection]
@@ -181,7 +184,7 @@
 
     (define/public (open-connection host port ssl)
       (log-http-debug "opening connection: ~.s:~.s (ssl=~e)" host port ssl)
-      (new http-connection% (host host) (port port) (ssl ssl)))
+      (new http-connection% (host host) (port port) (ssl ssl) (custodian custodian)))
 
     (define/public (async-request req)
       (send (get-connection (request-url req)) async-request req))
