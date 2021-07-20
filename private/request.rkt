@@ -2,14 +2,14 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 #lang racket/base
-(require (for-syntax racket/base syntax/transformer)
+(require (for-syntax racket/base syntax/transformer scramble/struct-info)
          racket/match
          net/url-structs
          scramble/about
          "interfaces.rkt"
          "header-base.rkt"
          (submod "util.rkt" url))
-(provide (except-out (all-defined-out) request)
+(provide (except-out (all-defined-out) request request*)
          (rename-out [request* request]))
 
 ;; A Request is:
@@ -51,12 +51,9 @@
   (with-entry-point 'request
     (request method url header data)))
 
-(define-match-expander request*
-  (lambda (stx)
-    (syntax-case stx ()
-      [(_ method-p url-p header-p data-p)
-       (syntax/loc stx (request method-p url-p header-p data-p))]))
-  (make-variable-like-transformer #'make-request))
+(define-syntax request*
+  (adjust-struct-info (syntax-local-value #'request)
+                      #:constructor #'make-request))
 
 ;; request:can-replay? : Request -> Boolean
 ;; Can the request be replayed in a different actual connection?  Only care

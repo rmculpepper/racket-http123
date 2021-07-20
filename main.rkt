@@ -14,12 +14,7 @@
          "private/connection.rkt"
          "private/client.rkt")
 (provide (struct-out exn:fail:http123)
-         request
-         request?
-         request-method
-         request-url
-         request-header
-         request-data
+         (struct-out request)
          response<%>
          header<%>
          header-field-key?
