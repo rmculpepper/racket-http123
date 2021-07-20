@@ -43,9 +43,8 @@ connections. Connections are automatically closed after a few seconds of
 inactivity.
 
 The @racket[ssl] argument determines the client context used by
-@racket[ssl-connect] when making @tt{https} connections.
-
-See @method[http-client<%> fork] for an explanation of the other arguments.
+@racket[ssl-connect] when making @tt{https} connections.  See
+@method[http-client<%> fork] for an explanation of the other arguments.
 }
 
 @definterface[http-client<%> ()]{
