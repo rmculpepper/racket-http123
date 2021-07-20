@@ -6,12 +6,12 @@
          racket/match
          racket/promise
          binaryio/reader
+         scramble/evt
          "interfaces.rkt"
          "header.rkt"
          "regexp.rkt"
          (submod "util.rkt" port)
          (submod "util.rkt" url)
-         (submod "util.rkt" evt)
          "request.rkt"
          "response.rkt")
 (provide (all-defined-out))

@@ -5,8 +5,8 @@
 (require racket/class
          racket/match
          binaryio/reader
+         scramble/evt
          "interfaces.rkt"
-         (submod "util.rkt" evt)
          "hpack.rkt"
          "h2-frame.rkt"
          "h2-stream.rkt")
@@ -539,3 +539,11 @@
 
     (send-handshake my-new-config)
     ))
+
+;; ----------------------------------------
+
+(define (sleep-evt sec)
+  (guard-evt
+   (lambda ()
+     (alarm-evt
+      (+ (current-inexact-milliseconds) (* 1000.0 sec))))))

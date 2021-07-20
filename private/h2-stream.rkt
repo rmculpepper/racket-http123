@@ -6,11 +6,11 @@
          racket/match
          racket/promise
          net/url-string
+         scramble/evt
          "interfaces.rkt"
          "header.rkt"
          "response.rkt"
          (submod "util.rkt" port)
-         (submod "util.rkt" evt)
          "request.rkt"
          "h2-frame.rkt"
          "hpack.rkt")
