@@ -207,8 +207,9 @@
                       [(POST) (request 'GET u null #f)]
                       [else (request req-method u null req-data)])]
                    [(all->GET) ;; change method to GET, always (except HEAD?)
-                    (define new-method (case req-method [(HEAD) 'HEAD] [else 'GET]))
-                    (request new-method u null #f)]
+                    (case req-method
+                      [(HEAD GET) (request req-method u null req-data)]
+                      [else (request 'GET u null #f)])]
                    [(same-method) ;; must keep original method
                     (request req-method u null req-data)]
                    [else #f])]
