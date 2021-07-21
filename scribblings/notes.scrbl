@@ -49,7 +49,7 @@ fields} (http/2)}
 ]
 
 @; ------------------------------------------------------------
-@section[#:tag "log"]{Loggers}
+@section[#:tag "log"]{Logging}
 
 This library logs on the following topics:
 @itemlist[
@@ -64,6 +64,26 @@ http/1.1 protocol}
 the http/2 protocol}
 
 ]
+
+@; ------------------------------------------------------------
+@section[#:tag "misc"]{Miscellaneous Notes}
+
+A client automatically adds the following header fields, unless they overridden
+by user-supplied fields:
+@itemlist[
+@item{@tt{Accept-Encoding: gzip, deflate}}
+@item{@tt{User-Agent: racket-http123/}@emph{lib-version}}
+]
+
+In general, the functions and methods of this library are thread-safe but not
+kill-safe. For example, killing a thread that is using a client object has a
+small chance of damaging the client object so that future operations block
+forever.
+
+Responses are not bound to specific clients. It may be useful to fetch a
+response with one client and handle it (or handle redirections) with another
+client.
+
 
 @; ------------------------------------------------------------
 @section[#:tag "evt-result"]{Synchronizable Event Results}

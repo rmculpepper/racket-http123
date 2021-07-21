@@ -5,8 +5,8 @@
 
 @defmodule[http123]
 
-Implements an @as-index{HTTP client} with support for both @as-index{http/1.1}
-and @as-index{http/2} protocols.
+Implements an @as-index{HTTP client} with support for both @as-index{HTTP/1.1}
+and @as-index{HTTP/2} protocols.
 
 @; ------------------------------------------------------------
 

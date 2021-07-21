@@ -171,8 +171,8 @@ if @racket[_status-code-integer] is equal to @racket[(send resp
 @item{An entry of the form @racket[(list _status-class-symbol _handler)] matches
 if @racket[_status-class-symbol] is equal to @racket[(send resp
 @#,method[response<%> get-status-class])]. Examples of
-@racket[_status-class-symbol] include @racket['successful] and
-@racket['client-error].}
+@racket[_status-class-symbol] include @racket['successful] (2xx) and
+@racket['client-error] (4xx).}
 
 @item{An entry of the form @racket[(list 'else _handler)] always matches.}
 
@@ -217,41 +217,50 @@ an exception.
                                [#:fail fail (-> any) (lambda () (error ....))])
            any]{
 
-Automatically handles a Redirection (3xx) response according to the following
-rules:
+@margin-note{The @method[http-client<%> handle] and @method[http-client<%>
+handle-response] methods do not automatically handle redirection responses;
+@method[http-client<%> handle-redirection] must be explicitly called by a
+response handler.}
 
+Handles a Redirection (3xx) response according to the following rules:
 @itemlist[
 
 @item{If @racket[resp] does not have a @tt{Location} header field, or
 if the location is not a valid URL, then the handler fails.}
 
-@item{If there have already been @racket[limit] or more redirections
-from the original request (as determined by the
+@item{If there have already been @racket[limit] or more redirections from the
+original request (as determined by the
 @racket['@#,racketvalfont{_redirected-from}] key of @racket[(send resp
 @#,method[response<%> aux-info])]), then the handler fails.}
 
-@item{If @racket[resp]'s status code is 301 or 302, then a new request
-is made for the redirection location. If the previous method was
-@racket['POST], then the new method is @racket['GET]; otherwise, the
-new method is the same as the previous method.}
+@item{If @racket[resp]'s status code is @racket[301] or @racket[302], then a new
+request is made for the redirection location. If the previous method was
+@racket['POST], then the new method is @racket['GET]; otherwise, the new method
+is the same as the previous method.}
 
-@item{If @racket[resp]'s status code is 303, then a new request is
-made for the redirection location. If the previous method was
-@racket['HEAD], then the new method is @racket['HEAD]; otherwise, the
-new method is @racket['GET].}
+@item{If @racket[resp]'s status code is @racket[303], then a new request is made
+for the redirection location. If the previous method was @racket['HEAD], then
+the new method is @racket['HEAD]; otherwise, the new method is @racket['GET].}
 
-@item{If @racket[resp]'s status code is 307 or 308, then a new request
-is made for the redirection location. The new method is the same as
-the previous method.}
+@item{If @racket[resp]'s status code is @racket[307] or @racket[308], then a new
+request is made for the redirection location. The new method is the same as the
+previous method.}
 
-@item{Otherwise (for example, other status codes), the handler fails.}
+@item{Otherwise, the handler fails.}
 
 ]
 
-If the handler retries with a new location, it pushes @racket[resp]
-onto the @racket['@#,racketvalfont{_redirected-from}] auxiliary info value.
+On success, this method calls @method[http-client<%> handle] with the new
+request and the auxiliary info of @racket[resp] adjusted by adding @racket[resp]
+to the @racket['@#,racketvalfont{_redirected-from}] list. The header of the new
+request is initially empty (that is, the previous request header is @emph{not}
+carried over), but the new request is adjusted as usual by
+@method[http-client<%> adjust-request]. The data of the new request is the same
+as the data of the previous request is the method is the same; if the method is
+changed (for example, @racket['POST] to @racket['GET]), then the new request
+data is @racket[#f].
 
-If the handler fails, it calls @racket[fail]. The default @racket[fail] value
+On failure, this method calls @racket[fail]. The default @racket[fail] value
 raises an exception.
 }
 
