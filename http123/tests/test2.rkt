@@ -7,12 +7,10 @@
          racket/class
          syntax/srcloc
          rackunit
-         "private/interfaces.rkt"
-         "private/request.rkt"
-         "private/http2.rkt"
-         "private/response.rkt"
-         "private/h2-frame.rkt"
-         "private/hpack.rkt")
+         http123
+         http123/private/http2
+         http123/private/h2-frame
+         http123/private/hpack)
 
 (define TEST-TIMEOUT? #f)
 

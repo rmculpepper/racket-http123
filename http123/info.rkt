@@ -9,11 +9,17 @@
 (define collection "http123")
 (define deps
   '("base"
-    "binaryio-lib"
-    "scramble-lib"))
+    "http123-lib"))
 (define build-deps
   '("racket-doc"
-    "scribble-lib"))
+    "rackunit-lib"
+    "scribble-lib"
+    "net-doc"
+    "net-cookies-lib"
+    "net-cookies-doc"
+    "web-server-lib"))
+(define implies '("http123-lib"))
+(define pkg-authors '(ryanc))
 
 ;; ========================================
 ;; collect info

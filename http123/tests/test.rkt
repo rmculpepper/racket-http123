@@ -1,10 +1,13 @@
+;; Copyright 2021 Ryan Culpepper
+;; SPDX-License-Identifier: Apache-2.0
+
 #lang racket/base
 (require racket/class
          racket/port
          racket/cmdline
          rackunit
          json
-         "../main.rkt")
+         http123)
 
 ;; This tests the client behavior against the Racket web-server.
 ;; HTTP/1.1 is handled by the Racket web-server directly;
@@ -76,7 +79,7 @@
               "hello world")
 
 ;; ============================================================
-(require "../util/request.rkt")
+(require http123/util/request)
 
 (let ([jsexpr (hasheq 'abc 123 'hello "world" 'ns '(1 2 3))])
   (check-equal? (send client handle

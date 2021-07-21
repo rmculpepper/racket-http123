@@ -7,11 +7,11 @@
          racket/match
          syntax/srcloc
          rackunit
-         "private/interfaces.rkt"
-         "private/response.rkt"
-         "private/http11.rkt"
-         "private/request.rkt"
-         (prefix-in util: (submod "private/util.rkt" url)))
+         http123
+         http123/private/response
+         http123/private/http11
+         (prefix-in util: (submod http123/private/util url))
+         )
 
 (define (make-server responses server-in server-out)
   (thread

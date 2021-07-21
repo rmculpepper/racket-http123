@@ -1,8 +1,11 @@
+;; Copyright 2021 Ryan Culpepper
+;; SPDX-License-Identifier: Apache-2.0
+
 #lang racket/base
 (require racket/class
          rackunit
          json
-         "main.rkt")
+         http123)
 
 ;; Test using a few real live web servers.
 
