@@ -196,7 +196,7 @@
           (let ([rs (hash-ref aux '_redirected-from null)])
             (cons resp (if (list? rs) rs (list rs)))))
         (define new-aux (hash-set aux '_redirected-from redirected-from))
-        (define loc (send h get-ascii-value #"location"))
+        (define loc (send h get-ascii-string #"location"))
         (define new-req
           (cond [(and loc (<= (length redirected-from) limit))
                  (define u (effective-url req-url loc))

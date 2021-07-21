@@ -48,7 +48,7 @@
   (with-entry-point 'request/form-urlencoded
     (request-update (request method url header #f)
                     #:add-header '((#"content-type" #"application/x-www-form-urlencoded"))
-                    #:set-data (alist->form-urlencoded form-alist))))
+                    #:set-data (string->bytes/utf-8 (alist->form-urlencoded form-alist)))))
 
 (define (request/multipart method url header parts)
   (define boundary (base64-encode (crypto-random-bytes 30) #""))
@@ -80,11 +80,12 @@
 
 (define (write-part-prefix out boundary name header filename)
   (fprintf out "\r\n--~a\r\n" boundary)
-  (let ([enc-name (uri-encode name)]
+  (let ([enc-name (uri-encode (if (symbol? name) (symbol->string name) name))]
         [enc-filename (and filename (uri-encode filename))])
     (if enc-filename
         (fprintf out "content-disposition: form-data; name=~s; filename=~s" enc-name enc-filename)
         (fprintf out "content-disposition: form-data; name=~s" enc-name)))
+  (fprintf out "\r\n")
   (for ([hfield (in-list header)])
     (fprintf "~a: ~a\r\n" (car hfield) (cadr hfield)))
   (fprintf out "\r\n"))
