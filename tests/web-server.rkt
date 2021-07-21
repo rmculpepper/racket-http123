@@ -1,10 +1,14 @@
 #lang racket/base
 (require racket/runtime-path
          web-server/servlet
-         web-server/servlet-env)
+         web-server/servlet-env
+         json)
 
 (define-values (dispatch _make-url)
   (dispatch-rules
+   [("hello-text") #:method "get"
+    (lambda (req) (ok-response #"text/plain" "hello world"))]
+   ;; ----
    [("echo") #:method "post"
     (lambda (req)
       (define content-type
@@ -24,7 +28,37 @@
        #:code 200
        #:mime-type #"text/plain"
        (lambda (out) (for ([i n]) (write-char #\a out)))))]
+   [("secret") #:method "get"
+    (lambda (req)
+      (response/output
+       #:code 403
+       #:mime-type #"text/plain"
+       (lambda (out) (fprintf out "go away!"))))]
+   [("redirect301") #:method "post"
+    (lambda (req)
+      (response/output
+       #:code 301
+       #:headers (list (header #"Location" (request-post-data/raw req)))
+       void))]
+   [("form2json") #:method "post"
+    (lambda (req)
+      (response/output
+       #:code 200
+       #:mime-type #"application/json"
+       (lambda (out)
+         (write-json (for/hash ([b (request-bindings/raw req)] #:when (binding:form? b))
+                       (values (string->symbol (bytes->string/utf-8 (binding-id b)))
+                               (bytes->string/utf-8 (binding:form-value b))))
+                     out))))]
    ))
+
+(define (ok-response content-type data)
+  (response/output
+   #:code 200
+   #:mime-type content-type
+   (lambda (out)
+     (cond [(string? data) (write-string data out)]
+           [(procedure? data) (data out)]))))
 
 ;; --
 
@@ -32,7 +66,7 @@
 
 ;; Go
 (serve/servlet dispatch
-               #:port 17080
+               #:port 17180
                #:servlet-regexp #rx""
                #:command-line? #t
                ;; #:launch-browser? #f

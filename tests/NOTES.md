@@ -12,5 +12,5 @@
 
 # Create reverse proxy
 
-    nghttpx -b localhost,17080 -f '*,17090' --no-ocsp key.pem cert.pem
+    nghttpx -b localhost,17180 -f '*,17190' --no-ocsp key.pem cert.pem
 
