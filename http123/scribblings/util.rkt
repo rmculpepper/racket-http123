@@ -1,5 +1,5 @@
 #lang racket/base
-(require scribble/manual)
+(require scribble/core scribble/html-properties scribble/manual)
 (provide (all-defined-out))
 
 (define (h11rfc fragment . content)
@@ -14,6 +14,12 @@
 (define (hpackrfc fragment . content)
   (apply hyperlink (format "https://tools.ietf.org/html/rfc7541#~a" fragment) content))
 
+(define small-caps-style
+  (style #f (list (attributes '((style . "font-variant: small-caps"))))))
+
+(define (HTTP/1.1) "HTTP/1.1" #;(elem #:style small-caps-style "http/1.1"))
+(define (HTTP/2) "HTTP/2" #;(elem #:style small-caps-style "http/2"))
+(define (HTTP) "HTTP" #;(elem #:style small-caps-style "http"))
 
 ;; ----------------------------------------
 

@@ -149,7 +149,7 @@ Once read, content data is gone forever!
 
 Using @method[http-client<%> async-request] it is possible to submit
 send requests and receive responses as they arrive. In particular,
-with an http/2 connection, responses may arrive in an order different
+with an @(HTTP/2) connection, responses may arrive in an order different
 from the order the requests were sent. Of course, responses using
 different connections are always unordered.
 

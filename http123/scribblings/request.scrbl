@@ -61,11 +61,11 @@ body}. The @racket[data] field must be one of the following forms:
 @item{If @racket[data] is @racket[#f], the request has no body.}
 
 @item{If @racket[data] is a byte string, it is sent as the message body (and
-when using http/1.1, a @tt{Content-Length} header field will be added
+when using @(HTTP/1.1), a @tt{Content-Length} header field will be added
 automatically).}
 
 @item{If @racket[data] is a procedure, it is called with an output port to
-incrementally produce the message body (and when using http/1.1, a
+incrementally produce the message body (and when using @(HTTP/1.1), a
 @tt{Transfer-Encoding: chunked} header field will be added automatically). When
 the output port is closed, the message body is complete; the output port is also
 closed automatically when the call to @racket[data] returns. If the call to

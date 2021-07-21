@@ -21,10 +21,10 @@ form more suitable for comparison than parsing the error message}
 @item{@racket['version] --- either @racket['http/1.1] or @racket['http/2], only
 present for protocol-dependent errors}
 
-@item{@racket['http2-error] --- a symbol indicating an http/2
+@item{@racket['http2-error] --- a symbol indicating an @(HTTP/2)
 @h2rfc["section-7"]{error code} (eg, @racket['PROTOCOL_ERROR]) or
 @racket['unknown] if the error code is unfamiliar, only present when using
-http/2}
+@(HTTP/2)}
 
 @item{@racket['received] --- one of @racket['yes], @racket['no], or
 @racket['unknown], indicating whether the request was received and processed by

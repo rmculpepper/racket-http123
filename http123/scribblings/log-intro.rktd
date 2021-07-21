@@ -34,9 +34,9 @@
    (h
     -
     ()
-    (time u . "11:41:37 AM")
+    (time u . "11:17:11 PM")
     (date u . "07-21-2021")
-    (milliseconds_since_epoch . 1626867697820))))
+    (milliseconds_since_epoch . 1626909431013))))
  #""
  #"")
 ((send client handle (request 'GET "https://tools.ietf.org/rfc/rfc7540.txt"))
@@ -169,7 +169,7 @@
    (0
     (u
      .
-     "(new http2-response%\n (status-code 200)\n (request\n  (request\n   'GET\n   (url \"https\" #f \"www.google.com\" #f #t (list (path/param \"\" '())) '() #f)\n   '((#\"accept-encoding\" #\"gzip, deflate\")\n     (#\"accept-language\" #\"en\")\n     (#\"user-agent\" #\"racket-http123/0.1\"))\n   #f))\n (header-fields\n  '((#\"date\" #\"Wed, 21 Jul 2021 11:41:45 GMT\")\n    (#\"expires\" #\"-1\")\n    (#\"cache-control\" #\"private, max-age=0\")\n    (#\"content-type\" #\"text/html; charset=ISO-8859-1\")\n    (#\"p3p\"\n     #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n    (#\"content-encoding\" #\"gzip\")\n    (#\"server\" #\"gws\")\n    (#\"content-length\" #\"6172\")\n    (#\"x-xss-protection\" #\"0\")\n    (#\"x-frame-options\" #\"SAMEORIGIN\")))\n ...)\n"))))
+     "(new http2-response%\n (status-code 200)\n (request\n  (request\n   'GET\n   (url \"https\" #f \"www.google.com\" #f #t (list (path/param \"\" '())) '() #f)\n   '((#\"accept-encoding\" #\"gzip, deflate\")\n     (#\"accept-language\" #\"en\")\n     (#\"user-agent\" #\"racket-http123/0.1\"))\n   #f))\n (header-fields\n  '((#\"date\" #\"Wed, 21 Jul 2021 23:17:18 GMT\")\n    (#\"expires\" #\"-1\")\n    (#\"cache-control\" #\"private, max-age=0\")\n    (#\"content-type\" #\"text/html; charset=ISO-8859-1\")\n    (#\"p3p\"\n     #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n    (#\"content-encoding\" #\"gzip\")\n    (#\"server\" #\"gws\")\n    (#\"content-length\" #\"6151\")\n    (#\"x-xss-protection\" #\"0\")\n    (#\"x-frame-options\" #\"SAMEORIGIN\")))\n ...)\n"))))
  #""
  #"")
 ((send resp get-status-code) ((3) 0 () 0 () () (q values 200)) #"" #"")
@@ -211,6 +211,6 @@
    (0
     (u
      .
-     "(new http2-response%\n (status-code 200)\n (request\n  (request\n   'GET\n   (url \"https\" #f \"www.google.com\" #f #t (list (path/param \"\" '())) '() #f)\n   '((#\"accept-encoding\" #\"gzip, deflate\")\n     (#\"user-agent\" #\"racket-http123/0.1\"))\n   #f))\n (header-fields\n  '((#\"date\" #\"Wed, 21 Jul 2021 11:41:45 GMT\")\n    (#\"expires\" #\"-1\")\n    (#\"cache-control\" #\"private, max-age=0\")\n    (#\"content-type\" #\"text/html; charset=ISO-8859-1\")\n    (#\"p3p\"\n     #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n    (#\"content-encoding\" #\"gzip\")\n    (#\"server\" #\"gws\")\n    (#\"content-length\" #\"5887\")\n    (#\"x-xss-protection\" #\"0\")\n    (#\"x-frame-options\" #\"SAMEORIGIN\")))\n ...)\n"))))
+     "(new http2-response%\n (status-code 200)\n (request\n  (request\n   'GET\n   (url \"https\" #f \"www.google.com\" #f #t (list (path/param \"\" '())) '() #f)\n   '((#\"accept-encoding\" #\"gzip, deflate\")\n     (#\"user-agent\" #\"racket-http123/0.1\"))\n   #f))\n (header-fields\n  '((#\"date\" #\"Wed, 21 Jul 2021 23:17:19 GMT\")\n    (#\"expires\" #\"-1\")\n    (#\"cache-control\" #\"private, max-age=0\")\n    (#\"content-type\" #\"text/html; charset=ISO-8859-1\")\n    (#\"p3p\"\n     #\"CP=\\\"This is not a P3P policy! See g.co/p3phelp for more info.\\\"\")\n    (#\"content-encoding\" #\"gzip\")\n    (#\"server\" #\"gws\")\n    (#\"content-length\" #\"5903\")\n    (#\"x-xss-protection\" #\"0\")\n    (#\"x-frame-options\" #\"SAMEORIGIN\")))\n ...)\n"))))
  #""
  #"")

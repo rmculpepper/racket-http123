@@ -33,14 +33,13 @@ An HTTP client offers methods to perform @tech{requests} and handle
 Creates a new HTTP client that does not share connections with any
 existing clients.
 
-The client automatically creates connections as necessary based on
-request URLs. For @tt{https} requests, the client attempts to
-negotiate an http/2 connection using ALPN; if the server does not
-agree to http/2, the client falls back to http/1.1. For @tt{http}
-requests, only http/1.1 is supported. The client remembers the value of
-@racket[(current-custodian)] and uses that custodian when creating
-connections. Connections are automatically closed after a few seconds of
-inactivity.
+The client automatically creates connections as necessary based on request
+URLs. For @tt{https} requests, the client attempts to negotiate an @(HTTP/2)
+connection using ALPN; if the server does not agree to @(HTTP/2), the client
+falls back to @(HTTP/1.1). For @tt{http} requests, only @(HTTP/1.1) is
+supported. The client remembers the value of @racket[(current-custodian)] and
+uses that custodian when creating connections. Connections are automatically
+closed after a few seconds of inactivity.
 
 The @racket[ssl] argument determines the client context used by
 @racket[ssl-connect] when making @tt{https} connections.  See
@@ -182,7 +181,7 @@ If a handler is selected, it is called with @(this-obj) and @racket[resp].
 The default handler calls @method[http-client<%> handle-response-content] if
 @racket[resp] has the status code 200 (Found); otherwise, it closes
 @racket[resp]'s content input port and raises an exception. (Closing the content
-input port may cause an http/2 connection to cancel the corresponding stream.)
+input port may cause an @(HTTP/2) connection to cancel the corresponding stream.)
 }
 
 @defmethod[(handle-response-content [resp (is-a?/c response<%>)]) any]{

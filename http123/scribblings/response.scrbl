@@ -8,7 +8,7 @@
 
 @definterface[response<%> ()]{
 
-Represents an HTTP @deftech{response} (either http/1.1 or http/2).
+Represents an HTTP @deftech{response} (either @(HTTP/1.1) or @(HTTP/2)).
 
 The response object is created after successfully receiving the response status
 and header; it does not imply that the response's message body was successfully
@@ -85,7 +85,7 @@ the response or decompressing the content.
 
 It is not necessary to close the resulting input port.
 
-When using http/2, the following behavior applies to the returned input port:
+When using @(HTTP/2), the following behavior applies to the returned input port:
 @itemlist[
 
 @item{The unread content in the input port counts against the stream's flow
@@ -101,7 +101,7 @@ traffic and processing.}
 @defmethod[(get-trailer) (or/c #f (is-a?/c header<%>))]{
 
 Returns the response's @h11rfc["section-4.1.2"]{trailer}, or @racket[#f] if no
-trailer exists (for example, if an http/1.1 response did not use chunked
+trailer exists (for example, if an @(HTTP/1.1) response did not use chunked
 transfer encoding).
 
 This method blocks until the response has been fully received; see also

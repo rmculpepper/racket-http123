@@ -26,4 +26,4 @@
 
 (define name "http123")
 (define scribblings
-  '(["scribblings/http123.scrbl" (#;multi-page)]))
+  '(["scribblings/http123.scrbl" (multi-page)]))

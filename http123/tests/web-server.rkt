@@ -75,3 +75,7 @@
                ;; #:launch-browser? #f
                #:extra-files-paths (list (path->string static-dir))
                #:log-file "/dev/stdout")
+
+;; ============================================================
+(module test racket/base (void))
+;; ============================================================
