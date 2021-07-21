@@ -30,6 +30,8 @@
      (->m symbol?)]
     [get-header
      (->m (is-a?/c header<%>))]
+    [get-header-fields
+     (->m (listof header-field/c))]
     [get-content-type
      (->m (or/c #f symbol?))]
     [get-content-in
@@ -70,6 +72,8 @@
     (define/public (get-status-class)
       (status-code->class status-code))
     (define/public (get-header) header)
+    (define/public (get-header-fields)
+      (send header get-header-fields))
     (define/public (has-content?) (and content-in #t))
     (define/public (get-content-in [empty-port? #f])
       (or content-in (if empty-port? (open-input-bytes #"") #f)))
@@ -95,7 +99,9 @@
     (define/public (get-printing-class-name)
       'http-response%)
     (define/public (get-printing-components)
-      (values '(status-code request header) (list status-code request header) #t))
+      (values '(status-code request header-fields)
+              (list status-code request (send header get-header-fields))
+              #t))
     (define/public (about)
       (format "~a response with ~a body"
               status-code

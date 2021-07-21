@@ -39,7 +39,7 @@ adds useful methods.
 Interface for objects representing @rfc7231["section-7"]{response headers} and
 @h11rfc["section-4.1.2"]{trailers}.
 
-@defmethod[(get-header-field-list) (listof header-field/c)]{
+@defmethod[(get-header-fields) (listof header-field/c)]{
 
 Gets a list of header fields, where each entry has the form @racket[(list
 _key-bytes _value-bytes)]. The ordering of different keys in the resulting list

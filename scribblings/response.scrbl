@@ -50,7 +50,16 @@ Note: this library currently discards all Informational (1xx) responses.
 
 @defmethod[(get-header) (is-a?/c header<%>)]{
 
-Returns the response's @h11rfc["section-3.2"]{header}.
+Returns the response's @h11rfc["section-3.2"]{header} as a @racket[header<%>]
+object.
+}
+
+@defmethod[(get-header-fields) (listof header-field/c)]{
+
+Returns the response's @h11rfc["section-3.2"]{header} as a list of fields.
+
+Equivalent to
+@racket[(send (@#,method[response<%> get-header]) get-header-fields)].
 }
 
 @defmethod[(has-content?) boolean?]{

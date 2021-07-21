@@ -33,7 +33,7 @@
 
 (define header<%>
   (interface ()
-    [get-header-field-list
+    [get-header-fields
      (->m (listof header-field/c))]
     [get-header-lines
      (->m (listof bytes?))]
@@ -76,11 +76,11 @@
       (for ([k (in-hash-keys list-valued)])
         (hash-set! table k (reverse (hash-ref table k)))))
 
-    (define/public (get-header-field-list)
+    (define/public (get-header-fields)
       header-fields)
 
     (define/public (get-header-lines)
-      (for/list ([p (in-list (get-header-field-list))])
+      (for/list ([p (in-list (get-header-fields))])
         (match-define (list k v) p)
         (bytes-append k #": " v)))
 

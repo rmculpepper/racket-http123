@@ -18,7 +18,6 @@
          response<%>
          header<%>
          header-field-key?
-         http-client-base<%>
          http-client<%>
          current-response
 
