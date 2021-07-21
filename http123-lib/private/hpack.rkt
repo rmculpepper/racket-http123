@@ -676,7 +676,8 @@
 
 (module+ test
   (require racket/port
-           racket/pretty)
+           racket/pretty
+           rackunit)
   (pretty-print-columns 80)
 
   (define ex-header
@@ -696,12 +697,12 @@
   ;; hblock
 
   (define dec-header-reps (read-hfield-reps hblock))
-  (equal? dec-header-reps enc-header-reps)
+  (check-equal? dec-header-reps enc-header-reps)
   ;(pretty-print dec-header-reps)
 
   (define dec-header (decode-header hblock (make-dtable 512)))
   ;(pretty-print dec-header)
-  (equal? dec-header ex-header)
+  (check-equal? dec-header ex-header)
 
   ;; ============================================================
 
@@ -717,8 +718,8 @@
                               (#":path" #"/")
                               (#":authority" #"www.example.com"))
                             dt-shared #:huffman? #f))
-  (equal? (bytes->hex-string b1)
-          "828684410f7777772e6578616d706c652e636f6d")
+  (check-equal? (bytes->hex-string b1)
+                "828684410f7777772e6578616d706c652e636f6d")
 
   (define b2 (encode-header '((#":method" #"GET")
                               (#":scheme" #"http")
@@ -726,8 +727,8 @@
                               (#":authority" #"www.example.com")
                               (#"cache-control" #"no-cache"))
                             dt-shared #:huffman? #f))
-  (equal? (bytes->hex-string b2)
-          "828684be58086e6f2d6361636865")
+  (check-equal? (bytes->hex-string b2)
+                "828684be58086e6f2d6361636865")
 
   (define b3 (encode-header '((#":method" #"GET")
                               (#":scheme" #"https")
@@ -735,8 +736,8 @@
                               (#":authority" #"www.example.com")
                               (#"custom-key" #"custom-value"))
                             dt-shared #:huffman? #f #:overrides #hash((#"custom-key" . yes))))
-  (equal? (bytes->hex-string b3)
-          "828785bf400a637573746f6d2d6b65790c637573746f6d2d76616c7565")
+  (check-equal? (bytes->hex-string b3)
+                "828785bf400a637573746f6d2d6b65790c637573746f6d2d76616c7565")
 
   (define dt2 (make-dtable 4096)) ;; Note: shared between consecutive examples!
   (define h1 (encode-header '((#":method" #"GET")
@@ -744,8 +745,8 @@
                               (#":path" #"/")
                               (#":authority" #"www.example.com"))
                             dt2 #:huffman? #t))
-  (equal? (bytes->hex-string h1)
-          "828684418cf1e3c2e5f23a6ba0ab90f4ff")
+  (check-equal? (bytes->hex-string h1)
+                "828684418cf1e3c2e5f23a6ba0ab90f4ff")
 
   (define h2 (encode-header '((#":method" #"GET")
                               (#":scheme" #"http")
@@ -753,8 +754,8 @@
                               (#":authority" #"www.example.com")
                               (#"cache-control" #"no-cache"))
                             dt2 #:huffman? #t))
-  (equal? (bytes->hex-string h2)
-          "828684be5886a8eb10649cbf")
+  (check-equal? (bytes->hex-string h2)
+                "828684be5886a8eb10649cbf")
 
   (define h3 (encode-header '((#":method" #"GET")
                               (#":scheme" #"https")
@@ -762,8 +763,8 @@
                               (#":authority" #"www.example.com")
                               (#"custom-key" #"custom-value"))
                             dt2 #:huffman? #t #:overrides #hash((#"custom-key" . yes))))
-  (equal? (bytes->hex-string h3)
-          "828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf")
+  (check-equal? (bytes->hex-string h3)
+                "828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf")
 
   ;(bytes->hex-string (h-encode #"no-cache"))
   ;(h-decode (hex-string->bytes "a8eb10649cbf"))
