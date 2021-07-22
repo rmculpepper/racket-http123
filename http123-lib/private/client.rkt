@@ -59,7 +59,7 @@
            any)]
     [handle
      (->*m [request?]
-           [#:aux-info aux-info/c]
+           [#:user-info user-info/c]
            any)]
     ;; ----
     [adjust-request
@@ -120,10 +120,10 @@
                   ([adj (in-list request-adjusters)])
           (adj req))))
 
-    (define/public (handle req #:aux-info [aux '#hasheq()])
+    (define/public (handle req #:user-info [info '#hasheq()])
       (with-entry-point 'handle
         (define resp (sync-request req))
-        (send resp aux-info aux)
+        (send resp user-info info)
         (handle-response (sync-request req))))
 
     (define/public (handle-response resp)
@@ -191,11 +191,11 @@
         (match-define (request req-method req-url _ req-data) (send resp get-request))
         (send resp close-content-in)
         (define h (send resp get-header))
-        (define aux (send resp aux-info))
+        (define info (send resp user-info))
         (define redirected-from
-          (let ([rs (hash-ref aux '_redirected-from null)])
+          (let ([rs (hash-ref info '_redirected-from null)])
             (cons resp (if (list? rs) rs (list rs)))))
-        (define new-aux (hash-set aux '_redirected-from redirected-from))
+        (define new-info (hash-set info '_redirected-from redirected-from))
         (define loc (send h get-ascii-string #"location"))
         (define new-req
           (cond [(and loc (<= (length redirected-from) limit))
@@ -214,7 +214,7 @@
                     (request req-method u null req-data)]
                    [else #f])]
                 [else #f]))
-        (cond [new-req (handle new-req #:aux-info new-aux)]
+        (cond [new-req (handle new-req #:user-info new-info)]
               [else (fail)])))
 
     (define/private (effective-url base-url loc)

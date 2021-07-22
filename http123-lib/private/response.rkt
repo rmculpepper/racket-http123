@@ -16,7 +16,7 @@
 ;; FIXME/TODO:
 ;; - record headers actually sent, including UA-synthesized (eg, Host)
 
-(define aux-info/c (and/c hash? hash-eq? immutable? (not/c impersonator?)))
+(define user-info/c (and/c hash? hash-eq? immutable? (not/c impersonator?)))
 
 (define response<%>
   (interface (about<%>)
@@ -44,10 +44,10 @@
      (->m (evt/c (-> (or/c #f (is-a?/c header<%>)))))]
     [about
      (->m string?)]
-    [aux-info
+    [user-info
      (case->m
-      (-> aux-info/c)
-      (-> aux-info/c void?))]
+      (-> user-info/c)
+      (-> user-info/c void?))]
     ))
 
 ;; ------------------------------------------------------------
@@ -59,7 +59,7 @@
                 header          ;; header%
                 trailerbxe)     ;; (Evt (-> (or/c #f header%)))
     (init ((init-content content))) ;; #f or Bytes or InputPort
-    (field [aux #hasheq()])      ;; Hasheq[Any => Any]
+    (field [info #hasheq()])    ;; Hasheq[Any => Any]
     (super-new)
 
     ;; content-in : #f or InputPort
@@ -89,10 +89,10 @@
     (define/public (get-trailer)
       (and trailerbxe ((sync trailerbxe))))
 
-    (define/public aux-info
+    (define/public user-info
       (case-lambda
-        [() aux]
-        [(new-aux) (set! aux new-aux)]))
+        [() info]
+        [(new-info) (set! info new-info)]))
 
     ;; ----
 

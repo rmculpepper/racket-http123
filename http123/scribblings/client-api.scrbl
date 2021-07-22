@@ -119,7 +119,7 @@ for @(this-obj) and derived clients, but not for other clients that access
 }
 
 @defmethod[(handle [req request?]
-                   [#:aux-info aux-info (and/c hash? hash-eq? immutable?) '#hasheq()])
+                   [#:user-info user-info (and/c hash? hash-eq? immutable?) '#hasheq()])
            any]{
 
 Adjusts @racket[req] using the client's default header fields and adjusters (see
@@ -128,7 +128,7 @@ response listeners, and handles the response according to the client's response
 and content handlers (see @method[http-client<%> handle-response] and
 @method[http-client<%> handle-response-content]).
 
-The @racket[aux-info] hash is included in the response. Symbols starting with an
+The @racket[user-info] hash is included in the response. Symbols starting with an
 underscore (@litchar{_}) are reserved for use as keys by this library---for
 example, @method[http-client<%> handle-redirection] uses the
 @racket['@#,racketvalfont{_redirected-from}] key.
@@ -138,7 +138,7 @@ The result is the result of the selected response handler.
 Equivalent to
 @racketblock[
 (let ([resp (send @#,(this-obj) @#,method[http-client<%> sync-request] req)])
-  (send resp @#,method[response<%> aux-info] aux-info)
+  (send resp @#,method[response<%> user-info] user-info)
   (send @#,(this-obj) @#,method[http-client<%> handle-response]))
 ]}
 
@@ -230,7 +230,7 @@ if the location is not a valid URL, then the handler fails.}
 @item{If there have already been @racket[limit] or more redirections from the
 original request (as determined by the
 @racket['@#,racketvalfont{_redirected-from}] key of @racket[(send resp
-@#,method[response<%> aux-info])]), then the handler fails.}
+@#,method[response<%> user-info])]), then the handler fails.}
 
 @item{If @racket[resp]'s status code is @racket[301] or @racket[302], then a new
 request is made for the redirection location. If the previous method was
