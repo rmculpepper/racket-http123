@@ -10,8 +10,10 @@
          http123
          http123/private/response
          http123/private/http11
-         (prefix-in util: (submod http123/private/util url))
-         )
+         (prefix-in util: (submod http123/private/util url)))
+
+;; Test various error conditions for HTTP/1.1 actual connections using
+;; a fake server that sends scripted output.
 
 (define (make-server responses server-in server-out)
   (thread

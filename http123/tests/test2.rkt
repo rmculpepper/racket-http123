@@ -12,6 +12,9 @@
          http123/private/h2-frame
          http123/private/hpack)
 
+;; Test various error conditions for HTTP/2 actual connections using a
+;; fake server that sends scripted sequences of frames.
+
 (define TEST-TIMEOUT? #f)
 
 (define prelude
