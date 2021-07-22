@@ -37,7 +37,7 @@
 ;;   for mutual exclusion.
 ;; - Reads are done in a separate reader thread.
 (define http11-actual-connection%
-  (class* object% (#; http-connection<%>)
+  (class* object% (http-actual-connection<%>)
     (init-field parent in out)
 
     (super-new)

@@ -18,3 +18,4 @@ and @as-index{HTTP/2} protocols.
 @include-section["exn.scrbl"]
 @include-section["util.scrbl"]
 @include-section["notes.scrbl"]
+@include-section["internal.scrbl"]

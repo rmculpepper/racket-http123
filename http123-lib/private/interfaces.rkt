@@ -107,3 +107,12 @@
   (define details (info-details info))
   (define message (format "~a: ~a~a" who base-message details))
   (exn:fail:http123 message cms info))
+
+;; ============================================================
+
+(define http-actual-connection<%>
+  (interface ()
+    open-request    ;; Request -> #f or (Evt (-> Response))
+    open?           ;; -> Boolean
+    abandon         ;; -> Void
+    ))

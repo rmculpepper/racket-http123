@@ -17,14 +17,14 @@
          (submod "util.rkt" url))
 (provide (all-defined-out))
 
-;; ============================================================
-;; Connection
-
-(define http-connection<%>
+(define http-client-base<%>
   (interface ()
     [async-request
-     (->m request? (evt/c (-> any)))]
+     (->m request? (evt/c (-> (is-a?/c response<%>))))]
     ))
+
+;; ============================================================
+;; Connection
 
 (define have-alpn?
   (let-values ([(req-kws opt-kws) (procedure-keywords ssl-connect)])
@@ -33,16 +33,13 @@
   (log-http-warning "http/2 not available because ssl-connect does not support ALPN"))
 
 (define http-connection%
-  (class* object% (#; http-connection<%>)
-    (init-field host
-                port
-                ssl
+  (class* object% (http-client-base<%>)
+    (init-field host    ;; String
+                port    ;; Nat
+                ssl     ;; 'auto | 'secure | ssl-client-context
                 [protocols '(http/2 http/1.1)]
                 [custodian (current-custodian)])
     (super-new)
-
-    (define/public (get-host) host)
-    (define/public (get-port) port)
 
     (define lock (make-semaphore 1))
     (define-syntax-rule (with-lock e ...) ;; doesn't unlock on escape
@@ -56,44 +53,44 @@
                (log-http-debug "using existing connection")
                conn]
               [connect?
-               (let ([c (with-handlers ([exn? (lambda (e)
-                                                (semaphore-post lock)
-                                                (raise e))])
+               (let ([c (with-handler (lambda (e)
+                                        (semaphore-post lock)
+                                        (raise e))
                           (parameterize ((current-custodian custodian))
+                            (log-http-debug "connecting to ~e" (format "~a:~a" host port))
                             (open-actual-connection)))])
                  (log-http-debug "created new actual connection")
                  (begin (set! conn c) c))]
               [else #f])))
 
-    (define/private (open-actual-connection)
+    (define/public (open-actual-connection)
       (define try-http1? (memq 'http/1.1 protocols))
       (define try-http2? (and (memq 'http/2 protocols) have-alpn?))
-      (log-http-debug "connecting to ~e" (format "~a:~a" host port))
       (cond [(not ssl)
              (define-values (in out)
                (tcp-connect host port))
              (log-http-debug "connected without TLS, http/1.1")
-             (make-http1 in out)]
+             (make-http1-connection in out)]
             [(and try-http1? try-http2?)
              (define-values (in out)
                (ssl-connect host port ssl #:alpn '(#"h2" #"http/1.1")))
              (case (ssl-get-alpn-selected in)
                [(#"h2")
                 (log-http-debug "connected with TLS, ALPN=h2")
-                (make-http2 in out)]
+                (make-http2-connection in out)]
                [(#"http/1.1")
                 (log-http-debug "connected with TLS, ALPN=http/1.1")
-                (make-http1 in out)]
+                (make-http1-connection in out)]
                [else
                 (log-http-debug "connected with TLS, http/1.1 (no ALPN selected)")
-                (make-http1 in out)])]
+                (make-http1-connection in out)])]
             [try-http2?
              (define-values (in out)
                (ssl-connect host port ssl #:alpn '(#"h2")))
              (case (ssl-get-alpn-selected in)
                [(#"h2")
                 (log-http-debug "connected with TLS, ALPN=h2")
-                (make-http2 in out)]
+                (make-http2-connection in out)]
                [else
                 (log-http-debug "connected with TLS, no ALPN selected, failing")
                 (close-input-port in)
@@ -104,13 +101,13 @@
              (define-values (in out)
                (ssl-connect host port ssl))
              (log-http-debug "connected with TLS, http/1.1 (did not use ALPN)")
-             (make-http1 in out)]
+             (make-http1-connection in out)]
             [else (h-error "no protocols available")]))
 
-    (define/private (make-http1 in out)
+    (define/public (make-http1-connection in out)
       (new http11-actual-connection% (parent this)
            (in in) (out out)))
-    (define/private (make-http2 in out)
+    (define/public (make-http2-connection in out)
       (new http2-actual-connection% (parent this)
            (in in) (out out)))
 
@@ -146,14 +143,6 @@
 ;; ============================================================
 ;; Connection manager
 
-(define http-client-base<%>
-  (interface ()
-    [async-request
-     (->m request? (evt/c (-> (is-a?/c response<%>))))]
-    ))
-
-;; ------------------------------------------------------------
-
 ;; Add helpers to
 ;; - create a client that uses a single connection
 ;;   (eg, for CONNECT tunneling)
@@ -163,7 +152,7 @@
 ;; generally, need to figure out requirements for proxies
 
 (define connection-manager%
-  (class* object% ()
+  (class* object% (http-client-base<%>)
     (init-field [ssl 'secure]
                 [custodian (current-custodian)])
     (super-new)

@@ -58,7 +58,7 @@
 (define counter 0)
 
 (define http2-actual-connection%
-  (class* object% ()
+  (class* object% (http-actual-connection<%>)
     (init-field in out parent)
     (init [my-new-config init-config])
     (super-new)

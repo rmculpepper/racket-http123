@@ -1,6 +1,9 @@
 #lang racket/base
-(require scribble/core scribble/html-properties scribble/manual)
-(provide (all-defined-out))
+(require (for-syntax racket/base)
+         (only-in scribble/racket make-element-id-transformer)
+         scribble/core scribble/html-properties scribble/manual)
+(provide (all-defined-out)
+         (for-syntax (all-defined-out)))
 
 (define (h11rfc fragment . content)
   (apply hyperlink (format "https://tools.ietf.org/html/rfc7230#~a" fragment) content))
@@ -20,6 +23,11 @@
 (define (HTTP/1.1) "HTTP/1.1" #;(elem #:style small-caps-style "http/1.1"))
 (define (HTTP/2) "HTTP/2" #;(elem #:style small-caps-style "http/2"))
 (define (HTTP) "HTTP" #;(elem #:style small-caps-style "http"))
+
+(begin-for-syntax
+  (define (method-name-tx class/ifc-id method-id)
+    (make-element-id-transformer
+     (lambda (stx) #`(method #,class/ifc-id #,method-id)))))
 
 ;; ----------------------------------------
 
