@@ -6,6 +6,7 @@
          web-server/servlet
          web-server/servlet-env
          json)
+(provide (all-defined-out))
 
 (define-values (dispatch _make-url)
   (dispatch-rules
@@ -68,14 +69,12 @@
 (define-runtime-path static-dir "static")
 
 ;; Go
-(serve/servlet dispatch
-               #:port 17180
-               #:servlet-regexp #rx""
-               #:command-line? #t
-               ;; #:launch-browser? #f
-               #:extra-files-paths (list (path->string static-dir))
-               #:log-file "/dev/stdout")
 
-;; ============================================================
-(module test racket/base (void))
-;; ============================================================
+(define (start [log? #f])
+  (serve/servlet dispatch
+                 #:port 17180
+                 #:servlet-regexp #rx""
+                 #:command-line? #t
+                 ;; #:launch-browser? #f
+                 #:extra-files-paths (list (path->string static-dir))
+                 #:log-file (if log? "/dev/stdout" #f)))

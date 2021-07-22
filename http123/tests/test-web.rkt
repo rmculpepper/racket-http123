@@ -9,6 +9,9 @@
 
 ;; Test using a few real live web servers.
 
+(module test racket/base
+  (printf "Skipping; run manually with `racket test-web.rkt`.\n"))
+
 (define client
   (http-client #:add-header
                `([x-racket-version ,(version)])
