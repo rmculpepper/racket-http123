@@ -10,48 +10,13 @@
          json
          http123
          http123/util/request
-         "web-server.rkt")
+         (submod "web-server.rkt" start-server))
 
 ;; This tests the client behavior against the Racket web-server.
 ;; HTTP/1.1 is handled by the Racket web-server directly;
 ;; HTTP/2 is handled by a nghttpx reverse proxy.
 
 ;; See also web-server.rkt and NOTES.md.
-
-;; ----------------------------------------
-;; Servers
-
-(define server-cust (make-custodian))
-
-(define (shutdown-servers)
-  (custodian-shutdown-all server-cust))
-
-;; Start the Racket web server
-(parameterize ((current-custodian server-cust))
-  (void (thread start)))
-
-;; Start the nghttpx reverse proxy, if available.
-(define nghttpx (find-executable-path "nghttpx"))
-(define-runtime-path key-pem "key.pem")
-(define-runtime-path cert-pem "cert.pem")
-(when nghttpx
-  (parameterize ((current-custodian server-cust)
-                 (current-subprocess-custodian-mode 'interrupt)
-                 ;; Discard nghttpx logging
-                 (current-error-port (open-output-nowhere)))
-    (void
-     (thread
-      (lambda ()
-        (system* nghttpx
-                 "-b" "localhost,17180"
-                 "-f" "*,17190"
-                 "--no-ocsp"
-                 key-pem cert-pem))))))
-
-(define have-http2? (and nghttpx #t))
-
-;; Give the servers time to start up...
-(sleep 0.2)
 
 ;; ----------------------------------------
 

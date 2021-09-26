@@ -32,6 +32,16 @@
        #:code 200
        #:mime-type #"text/plain"
        (lambda (out) (for ([i n]) (write-char #\a out)))))]
+   [("slow" (integer-arg))
+    (lambda (req delay-ms)
+      (response/output
+       #:code 200
+       #:mime-type #"text/plain"
+       (lambda (out)
+         (for ([i #e1e2])
+           (sleep (* 0.001 delay-ms))
+           (for ([j 10]) (write-char #\a out))
+           (flush-output out)))))]
    [("secret") #:method "get"
     (lambda (req)
       (response/output
@@ -78,3 +88,46 @@
                  ;; #:launch-browser? #f
                  #:extra-files-paths (list (path->string static-dir))
                  #:log-file (if log? "/dev/stdout" #f)))
+
+;; ----------------------------------------
+
+(module+ start-server
+  (require racket/system
+           racket/port)
+  (provide (all-defined-out))
+
+  (define server-cust (make-custodian))
+
+  (define (shutdown-servers)
+    (custodian-shutdown-all server-cust))
+
+  ;; Start the Racket web server
+  (parameterize ((current-custodian server-cust))
+    (void (thread start)))
+
+  ;; Start the nghttpx reverse proxy, if available.
+  (define nghttpx (find-executable-path "nghttpx"))
+  (define-runtime-path key-pem "key.pem")
+  (define-runtime-path cert-pem "cert.pem")
+  (when nghttpx
+    (parameterize ((current-custodian server-cust)
+                   (current-subprocess-custodian-mode 'interrupt)
+                   ;; Discard nghttpx logging
+                   (current-error-port (open-output-nowhere)))
+      (void
+       (thread
+        (lambda ()
+          (system* nghttpx
+                   "-b" "localhost,17180"
+                   "-f" "*,17190"
+                   "--no-ocsp"
+                   key-pem cert-pem))))))
+
+  (define have-http2? (and nghttpx #t))
+
+  ;; Give the servers time to start up...
+  (sleep 0.2))
+
+(module+ main
+  (require (submod ".." start-server))
+  (sync never-evt))
