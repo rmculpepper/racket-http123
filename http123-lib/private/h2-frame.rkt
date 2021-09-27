@@ -106,13 +106,19 @@
 
 ;; ----------------------------------------
 
-(define (read-frame br)
+(define DEFAULT-MAX-FRAME-SIZE (expt 2 14))
+
+;; read-frame : BinaryReader [Nat] -> (U Frame 'frame-size-error 'bad-padding)
+(define (read-frame br [maxlen DEFAULT-MAX-FRAME-SIZE])
   (define-values (len type flags streamid) (read-frame-header br))
-  (define payload
-    (b-call/save-limit br (lambda ()
-                            (b-push-limit br len)
-                            (read-frame-payload br type flags))))
-  (frame type flags streamid payload))
+  (cond [(<= 0 len maxlen)
+         (define payload
+           (b-call/save-limit br (lambda ()
+                                   (b-push-limit br len)
+                                   (read-frame-payload br type flags))))
+         (cond [(eq? payload 'frame-bad-padding) payload]
+               [else (frame type flags streamid payload)])]
+        [else 'frame-size-error]))
 
 (define (read-frame-header br)
   (define len (b-read-be-uint br 3))
@@ -124,17 +130,17 @@
 (define (read-streamid br)
   (trim-streamid (b-read-be-uint br 4)))
 
+;; read-frame-payload : BinaryReader Type Flags -> (U Payload 'bad-padding)
 ;; PRE: br limit set to payload length
 (define (read-frame-payload br type flags)
   (define (discarding-padding proc)
     (define padlen (if (flags-has? flags flag:PADDED) (b-read-byte br) 0))
-    (begin0 (b-call/save-limit br (lambda ()
-                                    (define len (- (b-get-limit br) padlen))
-                                    (when (< len 0) '_) ;; FIXME
-                                    (b-push-limit br len)
-                                    (proc padlen)))
-      ;; Note: MAY check padding is zero. We don't.
-      (b-read-bytes br padlen)))
+    (define len (- (b-get-limit br) padlen))
+    (if (< len 0)
+        'frame-bad-padding
+        (begin0 (b-call/save-limit br (lambda () (b-push-limit br len) (proc padlen)))
+          ;; Note: MAY check padding is zero. We don't.
+          (b-read-bytes br padlen))))
   (define (rest-of-payload)
     (b-read-bytes br (b-get-limit br)))
   (match type

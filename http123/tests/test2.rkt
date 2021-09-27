@@ -33,10 +33,18 @@
            [(? frame? fr)
             (write-frame server-out fr)
             (flush-output server-out)]
+           [(list 'buggy (? exact-integer? adjustlen) (? frame? fr))
+            (buggy-write-frame server-out fr adjustlen)
+            (flush-output server-out)]
            [(? real? t) (sleep t)]
            ['sleep (sleep 0.02)]))
        (close-output-port server-out)
        (close-input-port server-in)))))
+
+(define (buggy-write-frame out fr adjustlen)
+  (match-define (frame type flags streamid payload) fr)
+  (write-frame-header out (+ adjustlen (payload-length flags payload)) type flags streamid)
+  (write-frame-payload out flags payload))
 
 (define (setup actions)
   (define-values (server-in out-to-server) (make-pipe))
@@ -78,6 +86,12 @@
 
 ;; ----------------------------------------
 ;; from http2.rkt:
+
+;; handle-frame-or-other:
+(test1e (list #rx"frame size error")
+        (list (frame type:DATA 0 3 (fp:data 0 (make-bytes (add1 DEFAULT-MAX-FRAME-SIZE))))))
+(test1e (list #rx"bad padding")
+        (list (list 'buggy -50 (frame type:DATA flag:PADDED 3 (fp:data 100 #"")))))
 
 ;; get-stream:
 (test1e (list #rx"reference to stream 0" conn-proto-err)

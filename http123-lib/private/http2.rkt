@@ -46,7 +46,7 @@
           'enable-push 1
           'max-concurrent-streams +inf.0
           'initial-window-size INIT-FLOW-WINDOW
-          'max-frame-size (expt 2 14)
+          'max-frame-size DEFAULT-MAX-FRAME-SIZE
           'max-header-list-size +inf.0))
 
 (define init-config
@@ -181,6 +181,10 @@
          (close-ports)
          (for ([(streamid stream) (in-hash stream-table)])
            (send stream handle-eof))]
+        ['frame-size-error
+         (connection-error error:FRAME_SIZE_ERROR "frame size error")]
+        ['frame-bad-padding
+         (connection-error error:PROTOCOL_ERROR "bad padding")]
         [(? procedure?) (v)]))
 
     (define in-continue-frames null) ;; (Listof Frame), reversed
@@ -470,13 +474,17 @@
              (thread-send manager-thread 'EOF void)
              (void)]
             [else
-             (define fr (read-frame br))
-             ;; FIXME: handle reading errors...
+             (define fr
+               (with-handler (lambda (e)
+                               (thread-send manager-thread 'EOF void)
+                               (raise e))
+                 (read-frame br (get-config-value 'max-frame-size))))
              (log-http2-debug "~a <-- ~a" ID
                               (parameterize ((error-print-width 60))
                                 (format "~e" fr)))
              (thread-send manager-thread fr void)
-             (reader)]))
+             (cond [(frame? fr) (reader)]
+                   [else (thread-send manager-thread 'EOF void)])]))
 
     (define manager-thread (thread (lambda () (manager))))
     (define reader-thread (thread (lambda () (with-handlers ([exn:break? void]) (reader)))))
