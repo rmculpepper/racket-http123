@@ -4,16 +4,8 @@
 #lang racket/base
 (require racket/class
          racket/match
-         racket/promise
-         net/url-string
-         scramble/evt
          "interfaces.rkt"
-         "header.rkt"
-         "response.rkt"
-         (submod "util.rkt" port)
-         "request.rkt"
-         "h2-frame.rkt"
-         "hpack.rkt")
+         "h2-frame.rkt")
 (provide (all-defined-out))
 
 (define INIT-FLOW-WINDOW (sub1 (expt 2 16)))
