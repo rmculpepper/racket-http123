@@ -9,10 +9,12 @@
          "interfaces.rkt"
          "hpack.rkt"
          "h2-frame.rkt"
-         "h2-stream.rkt")
+         "h2-stream.rkt"
+         "h2-client-app.rkt")
 (provide (all-defined-out))
 
 ;; FIXME/TODO:
+;; - move timeout state to separate object?
 ;; - add way(s) to shut down connection, including ports
 ;;   - abandon waits for server to send EOF
 ;;   - user could use custodian
@@ -21,6 +23,10 @@
 ;;   - flow-control (eg, init in-flow window)
 ;;   - timeouts
 ;; - handle CONNECT ?
+;; - per stream timeouts:
+;;   - total time limit: if full response not received within S seconds, abort
+;;   - time since recv: if no bytes received in last S seconds, abort
+;;   - minimum throughput limit: if fewer than N bytes received in last S seconds, abort
 
 ;; References:
 ;; - https://tools.ietf.org/html/rfc7540
@@ -52,25 +58,25 @@
 
 (define counter 0)
 
-(define http2-actual-connection%
-  (class* object% (http-actual-connection<%>)
-    (init-field in out parent)
-    (init [my-new-config init-config])
+(define http2-endpoint-base%
+  (class* object% ()
+    (init-field in out)
     (super-new)
 
     (field [ID (string-upcase (format "#~X" (begin0 counter (set! counter (add1 counter)))))])
-    (define br (make-binary-reader in))
 
-    (define config standard-init-config) ;; Config of server
-    (define my-config standard-init-config) ;; Config of client, acked by server
-    (define my-configs/awaiting-ack null) ;; (Listof Config), oldest-first
+    (field [br (make-binary-reader in)])
+
+    (define peer-config standard-init-config)
+    (define my-config standard-init-config) ;; acked by server
+    (define my-configs/awaiting-ack null)   ;; oldest-first
 
     (define/public (get-ID) ID)
-    (define/public (get-config) config)
+    (define/public (get-config) peer-config)
     (define/public (get-my-config) my-config)
 
     (define/public (get-config-value key)
-      (hash-ref config key))
+      (hash-ref peer-config key))
 
     ;; Connection-wide limit on flow-controlled {sends, receives}.
     ;; Flow control is only applied to DATA frames (see 6.9).
@@ -78,8 +84,8 @@
     (define in-flow-window INIT-FLOW-WINDOW)
 
     ;; FIXME: resize on SETTINGS receive or ack?
-    (define reading-dt (make-dtable (hash-ref config 'header-table-size)))
-    (define sending-dt (make-dtable (hash-ref config 'header-table-size)))
+    (define reading-dt (make-dtable (get-config-value 'header-table-size)))
+    (define sending-dt (make-dtable (get-config-value 'header-table-size)))
 
     (define/public (get-sending-dt) sending-dt)
 
@@ -123,6 +129,16 @@
         (send stream handle-ua-connection-error errorcode comment))
       (raise 'connection-error))
 
+    (define/public (send-settings my-new-config)
+      (define settings
+        (for/list ([(key val) (in-hash my-new-config)]
+                   #:when (and (hash-has-key? standard-init-config key)
+                               (not (equal? (hash-ref standard-init-config key) val))))
+          (setting (encode-setting-key key) val)))
+      (queue-frame (frame type:SETTINGS 0 0 (fp:settings settings)))
+      (set! my-configs/awaiting-ack (list my-new-config))
+      (flush-frames))
+
     ;; ----------------------------------------
 
     ;; stream-table : Hash[Nat => stream%]
@@ -130,17 +146,14 @@
     ;; or equal to last-{s,c}-streamid, it is closed.
     (define stream-table (make-hasheqv))
     (define streams-changed? #f)
-    (define last-server-streamid 0) ;; Nat -- last streamid used by server
-    (define last-client-streamid 1) ;; Nat -- last streamid used by client
+    (field [last-server-streamid 0]) ;; Nat -- last streamid used by server
+    (field [last-client-streamid 1]) ;; Nat -- last streamid used by client
 
     (define/public (get-stream streamid [fail-ok? #f])
       (cond [(zero? streamid)
              (connection-error error:PROTOCOL_ERROR "reference to stream 0")]
             [(hash-ref stream-table streamid #f)
              => values]
-            [(and (streamid-from-server? streamid)
-                  (> streamid last-server-streamid))
-             (make-stream streamid #f #f)]
             [fail-ok? #f]
             [else (connection-error error:STREAM_CLOSED "unknown stream")]))
 
@@ -148,12 +161,8 @@
       (set! streams-changed? #t)
       (hash-remove! stream-table streamid))
 
-    (define/public (new-client-stream req send-req?)
-      (and (not is-closed?) (make-stream (+ last-client-streamid 2) req send-req?)))
-
-    (define/public (make-stream streamid req send-req?)
-      (define stream
-        (new http2-stream% (conn this) (streamid streamid) (req req) (send-req? send-req?)))
+    (define/public (make-stream streamid app)
+      (define stream (new http2-stream% (conn this) (streamid streamid) (app app)))
       (set! streams-changed? #t)
       (hash-set! stream-table streamid stream)
       (cond [(streamid-from-client? streamid)
@@ -162,8 +171,11 @@
              (set! last-server-streamid streamid)])
       stream)
 
+    (define/public (new-client-stream app)
+      (make-stream (+ last-client-streamid 2) app))
+
     ;; ----------------------------------------
-    ;; Handling frames received from server
+    ;; Handling frames received from peer
 
     (define/private (handle-frame-or-other v)
       (match v
@@ -185,17 +197,27 @@
     (define in-continue-frames null) ;; (Listof Frame), reversed
 
     (define/private (handle-frame fr)
-      (cond [(pair? in-continue-frames)
-             (define streamid (frame-streamid (car in-continue-frames)))
-             (match fr
-               [(frame (== type:CONTINUATION) flags (== streamid) payload)
+      (define (bad comment) (connection-error error:PROTOCOL_ERROR comment))
+      (match fr
+        [(frame type flags streamid payload)
+         (cond [(or (= type type:HEADERS) (= type type:PUSH_PROMISE))
+                (unless (null? in-continue-frames) (bad "expected CONTINUATION frame"))
+                (cond [(flags-has? flags flag:END_HEADERS)
+                       (handle-multipart-frames (list fr))]
+                      [else (set! in-continue-frames (list fr))])]
+               [(= type type:CONTINUATION)
+                ;; PRE: in-continue-frames != null
+                (unless (pair? in-continue-frames) (bad "unexpected CONTINUATION frame"))
+                (unless (= streamid (frame-streamid (car in-continue-frames)))
+                  (bad "CONTINUATION frame has wrong streamid"))
                 (cond [(flags-has? flags flag:END_HEADERS)
                        (define frs (reverse (cons fr in-continue-frames)))
                        (set! in-continue-frames null)
                        (handle-multipart-frames frs)]
                       [else (set! in-continue-frames (cons fr in-continue-frames))])]
-               [_ (connection-error error:PROTOCOL_ERROR "expected CONTINUATION frame")])]
-            [else (handle-frame* fr)]))
+               [else
+                (unless (null? in-continue-frames) (bad "expected CONTINUATION frame"))
+                (handle-frame* fr)])]))
 
     (define/private (handle-multipart-frames frs)
       (define (get-header streamid first-headerbf)
@@ -204,20 +226,21 @@
             (fp:continuation-headerbf (frame-payload fr))))
         (define headerb (apply bytes-append first-headerbf rest-headerbfs))
         (with-handler (lambda (e)
-                        (send (get-stream streamid) set-received! 'yes)
+                        (let ([stream (get-stream streamid #t)])
+                          (when stream (send stream set-received! 'yes)))
                         (connection-error error:COMPRESSION_ERROR "error decoding header"))
           (decode-header headerb reading-dt)))
       (match (car frs)
         [(frame (== type:HEADERS) flags streamid
                 (fp:headers padlen streamdep weight headerbf))
          (define header (get-header streamid headerbf))
-         (send (get-stream streamid) handle-headers-payload
-               flags (fp:headers padlen streamdep weight header))]
+         (define payload (fp:headers padlen streamdep weight header))
+         (handle-frame* (frame type:HEADERS flags streamid payload))]
         [(frame (== type:PUSH_PROMISE) flags streamid
                 (fp:push_promise padlen promised-streamid headerbf))
          (define header (get-header streamid headerbf))
-         (send (get-stream streamid) handle-push_promise-payload
-               flags (fp:push_promise padlen promised-streamid header))]))
+         (define payload (fp:push_promise padlen promised-streamid header))
+         (handle-frame* (frame type:PUSH_PROMISE flags streamid payload))]))
 
     (define/private (handle-frame* fr)
       (match fr
@@ -234,9 +257,7 @@
             (send (stream) handle-data-payload flags payload)]
            [(== type:HEADERS)
             (check-stream-nonzero)
-            (cond [(flags-has? flags flag:END_HEADERS)
-                   (handle-multipart-frames (list fr))]
-                  [else (set! in-continue-frames (list fr))])]
+            (send (stream) handle-headers-payload flags payload)]
            [(== type:PRIORITY)
             (check-stream-nonzero)
             (send (stream) handle-priority-payload payload)]
@@ -259,11 +280,10 @@
             (check-stream-nonzero)
             (when (zero? (hash-ref my-config 'enable-push))
               (connection-error error:PROTOCOL_ERROR "push not enabled"))
-            (cond [(flags-has? flags flag:END_HEADERS)
-                   (handle-multipart-frames (list fr))]
-                  [else (set! in-continue-frames (list fr))])]
+            (send (stream) handle-push_promise-payload flags payload)]
            [(== type:PING)
             (check-stream-zero)
+            ;; FIXME: move to public method to allow override?
             (unless (flags-has? flags flag:ACK)
               (queue-frame (frame type:PING flag:ACK 0 payload))
               (flush-frames))]
@@ -271,7 +291,7 @@
             (check-stream-zero)
             (match-define (fp:goaway last-streamid errorcode debug) payload)
             ;; If last-streamid=2^31-1 and errorcode = NO_ERROR, it is probably
-            ;; a timeout warning, and it will (proabably) be followed by another
+            ;; a timeout warning, and it will (probably) be followed by another
             ;; GOAWAY with a more specific last-streamid.
             ;; Note: GOAWAY does not close existing streams! (<= last-streamid)
             (for ([(streamid stream) (in-hash stream-table)]
@@ -291,7 +311,7 @@
 
     (define/private (handle-settings settings)
       (define new-config
-        (for/fold ([h config]) ([s (in-list settings)])
+        (for/fold ([h peer-config]) ([s (in-list settings)])
           (match-define (setting key value) s)
           (case key
             [(enable-push)
@@ -304,7 +324,7 @@
              (for ([(streamid stream) (in-hash stream-table)])
                (send stream adjust-out-flow-window delta))])
           (hash-set h key value)))
-      (set! config new-config)
+      (set! peer-config new-config)
       (queue-frame (frame type:SETTINGS flag:ACK 0 (fp:settings null))))
 
     (define/private (handle-connection-window_update flags delta)
@@ -324,7 +344,7 @@
     ;; ------------------------------------------------------------
     ;; Flow control
 
-    ;; The out-flow window is determined by the server.
+    ;; The out-flow window is determined by the peer.
 
     (define/public (get-out-flow-window) out-flow-window)
 
@@ -417,6 +437,16 @@
 
     ;; FIXME: make kill-safe
 
+    (define/public (start-manager)
+      (with-handlers ([(lambda (e) (eq? e 'connection-error))
+                       (lambda (e)
+                         (log-http2-debug "~a manager stopped due to connection error" ID))]
+                      [(lambda (e) #t)
+                       (lambda (e)
+                         (log-http2-debug "~a manager stopped due to uncaught exn: ~e" ID e)
+                         (when exn? ((error-display-handler) (exn-message e) e)))])
+        (manager)))
+
     (define/private (manager)
       (define reader-evt
         (handle-evt (thread-receive-evt)
@@ -445,14 +475,10 @@
                (loop/streams-changed)]
               [else (loop streams-evt)]))
       ;; ----
-      (with-handlers ([(lambda (e) (eq? e 'connection-error))
-                       (lambda (e)
-                         (log-http2-debug "~a manager stopped due to connection error" ID))]
-                      [(lambda (e) #t)
-                       (lambda (e)
-                         (log-http2-debug "~a manager stopped due to uncaught exn: ~e" ID e)
-                         (when exn? ((error-display-handler) (exn-message e) e)))])
-        (loop/streams-changed)))
+      (loop/streams-changed))
+
+    (define/public (start-reader)
+      (with-handlers ([exn:break? void]) (reader)))
 
     (define/private (reader)
       (sync (port-closed-evt in) in) ;; wait for input or EOF or closed
@@ -480,43 +506,22 @@
              (cond [(frame? fr) (reader)]
                    [else (thread-send manager-thread 'EOF void)])]))
 
-    (define manager-thread (thread (lambda () (manager))))
-    (define reader-thread (thread (lambda () (with-handlers ([exn:break? void]) (reader)))))
+    (define manager-thread (thread (lambda () (start-manager))))
+    (define reader-thread (thread (lambda () (start-reader))))
 
+    (define/public (send-to-manager v [fail void])
+      (thread-send manager-thread v fail))
 
     ;; ============================================================
     ;; Methods called from user thread
 
-    (define/public (open-request req)
-      (define streambxe (make-box-evt))
-      (define (do-open-request)
-        (with-handler (lambda (e)
-                        (box-evt-set! streambxe (lambda () (raise e)))
-                        (raise e))
-          (define stream (new-client-stream req #t))
-          (box-evt-set! streambxe (lambda () stream))))
-      (thread-send manager-thread do-open-request
-                   (lambda () (box-evt-set! streambxe (lambda () #f))))
-      (define stream ((sync streambxe)))
-      (cond [stream
-             (define-values (pump-data-out resp-bxe)
-               (send stream get-user-communication))
-             (pump-data-out)
-             resp-bxe]
-            [else #f]))
-
-    (define/public (register-user-abort-request stream e)
-      (define (do-register-abort) (send stream handle-user-abort e))
-      (thread-send manager-thread do-register-abort void))
-
     (define/public (abandon)
       (unless is-closed?
         (set-closed! 'user-abandoned #f)
-        (thread-send manager-thread
-                     (lambda ()
-                       (start-close-timeout!)
-                       (send-goaway))
-                     void)))
+        (send-to-manager
+         (lambda ()
+           (start-close-timeout!)
+           (send-goaway)))))
 
     ;; ============================================================
     ;; Hello, Goodbye
@@ -527,17 +532,52 @@
       ;; Don't close/abandon output port, because may need to write eg
       ;; WINDOW_UPDATE frames to finish receiving from existing streams.
       (void))
+    ))
+
+
+;; ============================================================
+
+(define http2-actual-connection%
+  (class* http2-endpoint-base% (http-actual-connection<%>)
+    (init parent [my-new-config init-config])
+    (inherit-field out)
+    (inherit new-client-stream
+             send-to-manager
+             send-settings)
+    (super-new)
+
+    ;; ============================================================
+    ;; Methods called from user thread
+
+    (define/public (open-request req)
+      (define bxe (make-box-evt))
+      (define (do-open-request)
+        (with-handler (lambda (e)
+                        (box-evt-set! bxe (lambda () (raise e)))
+                        (raise e))
+          (define app (new h2-client-stream-app% (req req)))
+          (define stream (new-client-stream app))
+          (box-evt-set! bxe (lambda () app))))
+      (send-to-manager do-open-request
+                       (lambda () (box-evt-set! bxe (lambda () #f))))
+      (match ((sync bxe))
+        [(? values app)
+         (define-values (pump-data-out resp-bxe)
+           (send app get-user-communication))
+         (pump-data-out)
+         resp-bxe]
+        [_ #f]))
+
+    (define/public (register-user-abort-request stream e)
+      (define (do-register-abort) (send stream handle-user-abort e))
+      (send-to-manager do-register-abort))
+
+    ;; ============================================================
+    ;; Hello, Goodbye
 
     (define/private (send-handshake my-new-config)
       (write-bytes http2-client-preface out)
-      (define settings
-        (for/list ([(key val) (in-hash my-new-config)]
-                   #:when (and (hash-has-key? standard-init-config key)
-                               (not (equal? (hash-ref standard-init-config key) val))))
-          (setting (encode-setting-key key) val)))
-      (queue-frame (frame type:SETTINGS 0 0 (fp:settings settings)))
-      (set! my-configs/awaiting-ack (list my-new-config))
-      (flush-frames))
+      (send-settings my-new-config))
 
     (send-handshake my-new-config)
     ))
