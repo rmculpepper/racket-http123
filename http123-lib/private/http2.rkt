@@ -16,11 +16,6 @@
 ;; - add way(s) to shut down connection, including ports
 ;;   - abandon waits for server to send EOF
 ;;   - user could use custodian
-;; - implement HPACK policies, limits
-;; - HPACK:
-;;   - be smarter about indexing (eg, don't index huge value that just
-;;     evicts everything in the table)
-;;   - reorder fields to enable indexing?
 ;; - configuration
 ;;   - various limits
 ;;   - flow-control (eg, init in-flow window)

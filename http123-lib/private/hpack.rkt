@@ -17,6 +17,12 @@
 ;; (lower-cased). This module assumes inputs are already in canonical
 ;; form.
 
+;; TODO:
+;; - implement policies, limits
+;; - be smarter about indexing (eg, don't index huge value that just
+;;   evicts everything in the table)
+;; - reorder fields to enable indexing?
+
 ;; ----------------------------------------
 
 ;; HeaderEntry = (list Bytes Bytes) | (list Bytes Bytes 'never-add)
