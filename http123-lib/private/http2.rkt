@@ -355,8 +355,12 @@
     ;; ------------------------------------------------------------
     ;; Timeouts
 
+    ;; timeout-mode is one of
+    ;; - 'recv   : last received a frame at timeout-base-ms
+    ;; - 'ping   : sent a ping at timeout-base-ms, not yet ack'd
+    ;; - 'closed : sent GOAWAY frame at timeout-base-ms, waiting to close ports
+    (define timeout-mode 'recv)
     (define timeout-base-ms (current-milliseconds))
-    (define timeout-mode 'recv) ;; 'recv | 'ping | 'closed
 
     (define/private (start-close-timeout!)
       (set! timeout-mode 'closed)
