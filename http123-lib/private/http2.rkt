@@ -444,7 +444,7 @@
                       [(lambda (e) #t)
                        (lambda (e)
                          (log-http2-debug "~a manager stopped due to uncaught exn: ~e" ID e)
-                         (when exn? ((error-display-handler) (exn-message e) e)))])
+                         (when (exn? e) ((error-display-handler) (exn-message e) e)))])
         (manager)))
 
     (define/private (manager)
