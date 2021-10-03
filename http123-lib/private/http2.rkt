@@ -424,9 +424,6 @@
                     (lambda (tre)
                       (define fr (thread-receive))
                       (handle-frame-or-other fr))))
-      (define manager-bored-evt
-        (wrap-evt (if #f (sleep-evt 1) never-evt)
-                  (lambda (ignored) (log-http2-debug "~a manager is bored!" ID))))
       (define timeout-evt (guard-evt (lambda () (get-timeout-evt))))
       ;; ----
       (define (loop/streams-changed)
@@ -437,13 +434,11 @@
         (define streams-evt (apply choice-evt work-evts))
         (loop streams-evt))
       (define (loop streams-evt)
-        #;(log-http2-debug "~a manager loop ~s" ID (current-inexact-milliseconds))
         (with-handlers ([(lambda (e) (eq? e 'escape-without-error)) void]
                         [(lambda (e) (eq? e 'stream-error)) void])
           (sync streams-evt
                 reader-evt
-                timeout-evt
-                manager-bored-evt))
+                timeout-evt))
         (flush-frames)
         (cond [(port-closed? out)
                (log-http2-debug "~a manager stopped; closed" ID)]
@@ -547,11 +542,3 @@
 
     (send-handshake my-new-config)
     ))
-
-;; ----------------------------------------
-
-(define (sleep-evt sec)
-  (guard-evt
-   (lambda ()
-     (alarm-evt
-      (+ (current-inexact-milliseconds) (* 1000.0 sec))))))
