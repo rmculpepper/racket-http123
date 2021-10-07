@@ -95,7 +95,7 @@
 
 ;; get-stream:
 (test1e (list #rx"reference to stream 0" conn-proto-err)
-        (list (frame type:HEADERS 0 0 (fp:headers #f #f #f #""))))
+        (list (frame type:HEADERS flag:END_HEADERS 0 (fp:headers #f #f #f #""))))
 (test1e (list #rx"unknown stream" conn-err (hasheq 'http2-error 'STREAM_CLOSED))
         (list (frame type:DATA 0 99 (fp:data 0 #"abc"))))
 
@@ -121,7 +121,7 @@
 (test1e (list #rx"unexpected SETTINGS ack" conn-proto-err)
         (list (frame type:SETTINGS flag:ACK 0 (fp:settings (list)))))
 (test1e (list #rx"push not enabled" conn-proto-err)
-        (list (frame type:PUSH_PROMISE 0 3 (fp:push_promise 0 6 #""))))
+        (list (frame type:PUSH_PROMISE flag:END_HEADERS 3 (fp:push_promise 0 6 #""))))
 (test1e (list #rx"unexpected CONTINUATION frame" conn-proto-err)
         (list (frame type:CONTINUATION 0 3 (fp:continuation #""))))
 
@@ -171,7 +171,7 @@
                      (mkheaders '((#":status" #"200") (#"bad key" #"value"))))))
 
 ;; pstate-base% bad-tx:
-(test1e (list #rx"unexpected DATA frame from server"
+(test1e (list #rx"unexpected DATA frame"
               stream-proto-err)
         (list (frame type:DATA 0 3 (fp:data 0 #"abc"))))
 
