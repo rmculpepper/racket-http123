@@ -13,7 +13,7 @@ both @as-index{HTTP/1.1} and @as-index{HTTP/2} protocols.
 @bold{Development} Development of this library is hosted by
 @hyperlink["http://github.com"]{GitHub} at the following project page:
 
-@centered{@url{https://github.com/rmculpepper/http123}}
+@centered{@url{https://github.com/rmculpepper/racket-http123}}
 
 @bold{Copying} This library is licensed
 @hyperlink["http://www.apache.org/licenses/LICENSE-2.0"]{Apache
