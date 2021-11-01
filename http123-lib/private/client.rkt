@@ -157,8 +157,9 @@
     (define/public (handle-response-content resp)
       (with-entry-point 'handle-response-content
         (define type (or (send resp get-content-type) #f))
+        (define general-type (and type (type-wildcard type)))
         (define handler
-          (cond [(assoc* (list type '*/*) content-handlers) => cadr]
+          (cond [(assoc* (list type general-type '*/*) content-handlers) => cadr]
                 [else #f]))
         (if handler
             (parameterize ((current-response resp))
@@ -252,6 +253,11 @@
     ['() #f]
     [(cons (and entry (cons k _)) alist)
      (if (member k ks) entry (assoc* ks alist))]))
+
+(define (type-wildcard type)
+  (cond [(regexp-match (rx^ (rx (record TOKEN) "/")) (symbol->string type))
+         => (lambda (m) (string->symbol (string-downcase (format "~a/*" (cadr m)))))]
+        [else #f]))
 
 ;; ----------------------------------------
 

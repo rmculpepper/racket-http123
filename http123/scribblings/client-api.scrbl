@@ -198,9 +198,12 @@ A content handler entry matches @racket[resp] according to the following rules:
 get-content-type)]. Examples of @racket[_mime-type-symbol] include
 @racket['text/html] and @racket['application/json].}
 
-@item{An entry of the form @racket[(list '*/* _handler)] always matches. (Note:
-except for this specific case, a star in a @racket[_mime-type-symbol] is not
-interpreted specially.)}
+@item{An entry of the form @racket[(list (quote
+@#,racketvalfont{@svar{mime-type}/*}) _handler)] matches if the main type of
+@racket[(send resp get-content-type)] is @racket[_mime-type]. For example,
+@racket['image/*] matches @racket['image/png].}
+
+@item{An entry of the form @racket[(list '*/* _handler)] always matches.}
 
 ]
 If a handler is selected, it is called with @racket[(send resp
