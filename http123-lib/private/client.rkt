@@ -124,7 +124,7 @@
       (with-entry-point 'handle
         (define resp (sync-request req))
         (send resp user-info info)
-        (handle-response (sync-request req))))
+        (handle-response resp)))
 
     (define/public (handle-response resp)
       (with-entry-point 'handle-response
