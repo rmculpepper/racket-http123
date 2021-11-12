@@ -169,7 +169,22 @@
 
 ;; A HeaderEntry is (list Bytes Bytes) | (list Bytes Bytes 'never-add)
 
-;; make-header-from-entries : (Listof HeaderEntry) -> header%
+;; make-header-from-h2-entries : (Listof HeaderEntry) -> header%
 ;; FIXME: preserve 'never-add ??
-(define (make-header-from-entries entries)
-  (make-header-from-list entries check-header-field))
+(define (make-header-from-h2-entries entries)
+  (make-header-from-list entries check-h2-header-entry))
+
+(define (check-h2-header-entry entry)
+  (define (bad)
+    (h-error "malformed header field\n  field: ~e" entry
+             #:info (hasheq 'code 'malformed-header-field)))
+  (match entry
+    [(list* (? bytes? key) (? bytes? value) (or '() '(never-add)))
+     (unless (regexp-match? (rx^$ lower-TOKEN) key)
+       ;; 8.1.2: keys must be lowercase
+       (bad))
+     (list (check-header-field-key key)
+           ;; Unclear whether the spec allows OWS around FIELD-VALUE,
+           ;; so be liberal: accept and remove it, like for http/1.1.
+           (check-header-field-value value))]
+    [_ (bad)]))

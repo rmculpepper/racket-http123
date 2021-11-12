@@ -161,7 +161,7 @@
                    (h2-error (format "error processing ~a" label)
                              #:base-info (send app get-info-for-exn)
                              #:info (hasheq 'wrapped-exn e)))
-     (make-header-from-entries header-entries))))
+     (make-header-from-h2-entries header-entries))))
 
 ;; ============================================================
 
@@ -283,7 +283,7 @@
         (delay/sync
          (define status
            (match (assoc #":status" pseudos)
-             [(list #":status" (and status (regexp #rx#"^[1-5][0-9][0-9]$")))
+             [(list* #":status" (and status (regexp #rx#"^[1-5][0-9][0-9]$")) _)
               (string->number (bytes->string/latin-1 status))]
              [_
               (h2-error "bad or missing status from server"
@@ -302,7 +302,7 @@
 (define (split-pseudo-header entries)
   (let loop ([acc null] [entries entries])
     (match entries
-      [(cons (and pseudo (list (regexp #rx#"^:") _)) rest)
+      [(cons (and pseudo (list* (regexp #rx#"^:") _)) rest)
        (loop (cons pseudo acc) rest)]
       [_ (values acc entries)])))
 

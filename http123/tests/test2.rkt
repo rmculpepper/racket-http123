@@ -79,6 +79,13 @@
 
 (define-syntax test1e (make-test-case-wrapper #'test1e*))
 
+(define (test1ok* proc actions)
+  (define ac (setup actions))
+  (define r1 (send ac open-request (request 'GET "https://localhost/something" null #f)))
+  (void (proc ((sync r1)))))
+
+(define-syntax test1ok (make-test-case-wrapper #'test1ok*))
+
 (define conn-err (hasheq 'code 'ua-connection-error 'version 'http/2))
 (define conn-proto-err (hash-set conn-err 'http2-error 'PROTOCOL_ERROR))
 (define stream-err (hasheq 'code 'ua-stream-error 'version 'http/2))
@@ -169,6 +176,10 @@
 (test1e (list #rx"error processing header")
         (list (frame type:HEADERS flag:END_HEADERS 3
                      (mkheaders '((#":status" #"200") (#"bad key" #"value"))))))
+
+(test1ok (lambda (r) 'ok)
+         (list (frame type:HEADERS (+ flag:END_STREAM flag:END_HEADERS) 3
+                      (mkheaders '((#":status" #"200" never-add) (#"key" #"value" never-add))))))
 
 ;; pstate-base% bad-tx:
 (test1e (list #rx"unexpected DATA frame"
