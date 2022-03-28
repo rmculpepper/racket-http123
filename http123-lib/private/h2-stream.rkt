@@ -4,7 +4,9 @@
 #lang racket/base
 (require racket/class
          racket/match
+         scramble/evt
          "interfaces.rkt"
+         (submod "util.rkt" port)
          "h2-frame.rkt")
 (provide (all-defined-out))
 
@@ -314,106 +316,176 @@
     (super-new)
 
     (field [stream #f])
-    (field [appstate #f])
 
     (define/public (start new-stream)
       (set! stream new-stream)
-      (set! appstate (make-initial-state))
-      (send appstate start))
+      (start*))
 
-    (abstract make-initial-state)
+    (abstract start*) ;; -> Void
 
     (define/public (get-stream) stream)
     (define/public (set-stream! v) (set! stream v))
-    (define/public (set-appstate! v) (set! appstate v))
 
     (define/public (get-work-evt)
-      (send appstate get-work-evt))
-    (define/public (handle-data data)
-      (send appstate handle-data data))
-    (define/public (handle-end-stream)
-      (send appstate handle-end-stream))
-    (define/public (handle-headers header-entries)
-      (send appstate handle-headers header-entries))
-    (define/public (handle-push_promise streamid header-entries)
-      (send appstate handle-push_promise streamid header-entries))
-    (define/public (handle-rst_stream errorcode)
-      (send appstate handle-rst_stream errorcode))
-    (define/public (handle-goaway errorcode debug)
-      (send appstate handle-goaway errorcode debug))
-    (define/public (handle-eof)
-      (send appstate handle-eof))
-    (define/public (handle-timeout)
-      (send appstate handle-timeout))
+      (choice-evt (get-recv-progress-work-evt)
+                  (get-send-data-work-evt)
+                  (get-closed-work-evt)))
 
-    (abstract handle-ua-error)
-    (abstract default-handle-rst_stream)
-    (abstract default-handle-goaway)
-    (abstract default-handle-eof)
-    (abstract default-handle-timeout)
+    ;; ------------------------------------------------------------
+    ;; Handlers
+
+    ;; recv-state : (U 'want-header 'want-data 'want-end 'done 'done/ignore), see 8.1
+    ;; - 'want-header : waiting for first (non-Informational) header
+    ;; - 'want-data   : received non-Informational header, waiting for data/trailer/end
+    ;; - 'want-end    : received trailer, cannot receive more data, waiting for end
+    ;; - 'done        : received END_STREAM, not expecting any more frames
+    ;; - 'done/ignore : protocol error, ignore future frames
+    (field [recv-state 'want-header])
+
+    (define/public (set-recv-state! new-state)
+      (unless (eq? recv-state new-state)
+        (set! recv-state new-state)
+        (when (memq new-state '(done done/ignore))
+          (check-for-closed))))
+
+    (define/public (handle-data data)
+      (case recv-state
+        [(want-data)
+         (write-bytes data out-to-user)]
+        [else (handle-unexpected 'DATA 'frame)]))
+
+    (define/public (handle-end-stream)
+      (case recv-state
+        [(want-data)
+         (close-output-port out-to-user)
+         (recv-trailer #f)
+         (set-recv-state! 'want-end)
+         (handle-end-stream)]
+        [(want-end)
+         (set-recv-state! 'done)]
+        [else (handle-unexpected 'END_STREAM 'flag)]))
+
+    (define/public (handle-headers header-entries)
+      (case recv-state
+        [(want-header)
+         (when (recv-header header-entries)
+           (set-recv-state! 'want-data))]
+        [(want-data)
+         (recv-trailer header-entries)
+         (set-recv-state! 'want-end)]
+        [else (handle-unexpected 'HEADERS 'frame)]))
+
+    (abstract recv-header) ;; HeaderEntries -> Boolean, returns #f for Informational
+    (abstract recv-trailer) ;; HeaderEntries/#f -> Void
+
+    (define/public (handle-push_promise streamid header-entries)
+      (handle-unexpected 'PUSH_PROMISE 'frame))
+
+    (define/public (handle-ua-error conn-error? errorcode msg wrapped-exn)
+      (build/send-exn-to-user/done
+       (cond [msg msg]
+             [conn-error? "connection error signaled by user agent"]
+             [else "stream error signaled by user agent"])
+       (list 'code (if conn-error? 'ua-connection-error 'ua-stream-error)
+             'http2-error (decode-error-code errorcode)
+             'http2-errorcode errorcode)
+       #:wrapped-exn wrapped-exn))
+
+    (define/public (handle-rst_stream errorcode)
+      (build/send-exn-to-user/done
+       (format "stream closed ~a (RST_STREAM)" (by-peer))
+       (list 'code (peer- 'reset-stream)
+             'http2-error (decode-error-code errorcode)
+             'http2-errorcode errorcode)))
+
+    (define/public (handle-goaway errorcode debug)
+      (build/send-exn-to-user/done
+       (format "connection closed ~a (GOAWAY)" (by-peer))
+       (list 'code (peer- 'closed)
+             'http2-error (decode-error-code errorcode)
+             'http2-errorcode errorcode)))
+
+    (define/public (handle-eof)
+      (build/send-exn-to-user/done
+       (format "connection closed ~a (EOF)" (by-peer))
+       (list 'code (peer- 'EOF))))
+
+    (define/public (handle-timeout)
+      (build/send-exn-to-user/done
+       "connection closed by user agent (timeout)"
+       (list 'code 'ua-timeout)))
 
     (define/public (handle-unexpected thing kind)
-      (send stream stream-error error:PROTOCOL_ERROR
-            (format "received unexpected ~a ~a in state: ~a"
-                    thing kind (object-name appstate))))
-    ))
+      (unless (eq? recv-state 'done/ignore)
+        (send stream stream-error error:PROTOCOL_ERROR
+              (format "received unexpected ~a ~a" thing kind))))
 
-;; ------------------------------------------------------------
+    ;; ------------------------------------------------------------
+    ;; User communication
 
-(define appstate-base%
-  (class object%
-    (init-field app)
-    (super-new)
+    (field [resp-bxe (make-box-evt)]
+           [trailerbxe (make-box-evt)]
+           [in-from-user #f]
+           [user-out #f]
+           [user-in #f]
+           [out-to-user #f]
+           [raise-user-in-exn #f])
+    (set!-values (in-from-user user-out) (make-pipe))
+    (set!-values (user-in out-to-user raise-user-in-exn) (make-wrapped-pipe))
 
-    (field [stream (get-field stream app)])
+    (define/public (send-exn-to-user e)
+      (box-evt-set! resp-bxe (lambda () (raise e)))
+      (box-evt-set! trailerbxe (lambda () (raise e)))
+      (unless (port-closed? out-to-user)
+        (raise-user-in-exn e))
+      (log-http2-debug "~a sent exn to user: ~e" (send stream get-ID) e))
 
-    (define/public (change-appstate! appstate)
-      (begin (teardown) (send app set-appstate! appstate)))
+    ;; --------------------
 
-    (define/public (handle-data data)
-      (send app handle-unexpected 'DATA 'frame))
-    (define/public (handle-end-stream)
-      (send app handle-unexpected 'END_STEAM 'flag))
-    (define/public (handle-headers header-entries)
-      (send app handle-unexpected 'HEADERS 'frame))
-    (define/public (handle-push_promise streamid header-entries)
-      (send app handle-unexpected 'PUSH_PROMISE 'frame))
+    ;; In-flow control tied to user's consumption of data. That is, when user
+    ;; consumes N bytes, request another N bytes from server.
 
-    (define/public (handle-rst_stream errorcode)
-      (send app default-handle-rst_stream errorcode))
-    (define/public (handle-goaway errorcode debug)
-      (send app default-handle-goaway errorcode debug))
-    (define/public (handle-eof)
-      (send app default-handle-eof))
-    (define/public (handle-timeout)
-      (send app default-handle-timeout))
+    (define last-progress-evt (port-progress-evt user-in)) ;; progress or close!
 
-    ;; Hooks for overriding:
-    (define/public (get-work-evt) never-evt)
-    (define/public (teardown) (void))
-    ))
+    (define/private (get-recv-progress-work-evt)
+      (handle-evt (guard-evt (lambda () last-progress-evt))
+                  (lambda (ignored) (update-in-flow-window))))
 
-(define send-data-state-base%
-  (class appstate-base%
-    (init-field in-from-user)
-    (inherit-field app stream)
-    (super-new)
+    ;; Update flow window when user consumes data.
+    (define/private (update-in-flow-window)
+      (cond [(port-closed? user-in) ;; don't want more data
+             (set! last-progress-evt never-evt)
+             (handle-closed-user-in)]
+            [else ;; want increment more data
+             (set! last-progress-evt (port-progress-evt user-in))
+             ;; buffered : space used in pipe's buffer
+             (define buffered (- (file-position out-to-user) (file-position user-in)))
+             #;(log-http2-debug "user read from content buffer: buffered = ~s" buffered)
+             (send stream update-in-flow-window buffered)]))
 
-    (define/override (get-work-evt)
+    (define/private (handle-closed-user-in)
+      (define streamid (send stream get-streamid))
+      (send stream queue-frame
+            (frame type:RST_STREAM 0 streamid (fp:rst_stream error:CANCEL)))
+      ;; Do not change recv-state, because more frames might be in flight,
+      ;; and peer might want to send trailer.
+      (void))
+
+    ;; --------------------
+
+    (define/private (get-send-data-work-evt)
       (handle-evt (guard-evt
                    (lambda ()
                      (cond [(port-closed? in-from-user)
                             ;; We read an EOF (user-out is closed), so
                             ;; in-from-user is always ready now; ignore.
+                            (done-sending-data)
                             never-evt]
                            [(not (positive? (send stream get-effective-out-flow-window)))
                             ;; Only check if out-flow window is nonempty.
                             never-evt]
                            [else in-from-user])))
                   (lambda (ignored) (send-data-from-user))))
-
-    (define/override (teardown)
-      (close-input-port in-from-user))
 
     (define/private (send-data-from-user)
       ;; PRE: in-from-user is ready for input
@@ -436,60 +508,54 @@
                 [(zero? r) end?]
                 [(< r len) (begin (send-data (subbytes buf 0 r) end?) end?)]
                 [else (begin (send-data buf end?) (or end? (loop (- allowed-len r))))])))
-      (when end? (done-sending)))
-
-    (abstract done-sending)
+      (when end? (done-sending-data)))
 
     (define/private (get-max-data-payload-length)
       (min (send stream get-config-value 'max-frame-size)
            ;; FIXME: make my preference for max frame size configurable
            (expt 2 20)))
-    ))
 
-(define read-data-state-base%
-  (class appstate-base%
-    (init-field user-in out-to-user)
-    (inherit-field app stream)
-    (super-new)
+    (define done-sending? #f)
 
-    (define last-progress-evt (port-progress-evt user-in)) ;; progress or close!
+    (define/public (done-sending-data)
+      (unless done-sending?
+        (set! done-sending? #t)
+        (check-for-closed)))
 
-    (define/override (get-work-evt)
-      (handle-evt (guard-evt (lambda () last-progress-evt))
-                  (lambda (ignored) (update-in-flow-window))))
+    ;; --------------------
 
-    (define/override (handle-data data)
-      (write-bytes data out-to-user))
+    (field [closed-ms #f])
 
-    (define/override (handle-end-stream)
-      (close-output-port out-to-user)
-      #| override with change-appstate! |#)
+    (define/public (check-for-closed)
+      (unless closed-ms
+        (when (and done-sending? (memq recv-state '(done done/ignore)))
+          (set! closed-ms (current-inexact-milliseconds)))))
 
-    ;; Update flow window when user consumes data.
-    (define/private (update-in-flow-window)
-      (cond [(port-closed? user-in) ;; don't want more data
-             (set! last-progress-evt never-evt)
-             (handle-closed-user-in)]
-            [else ;; want increment more data
-             (set! last-progress-evt (port-progress-evt user-in))
-             ;; buffered : space used in pipe's buffer
-             (define buffered (- (file-position out-to-user) (file-position user-in)))
-             #;(log-http2-debug "user read from content buffer: buffered = ~s" buffered)
-             (send stream update-in-flow-window buffered)]))
-
-    (abstract handle-closed-user-in)
-    ))
-
-(define done-state%
-  (class appstate-base%
-    (init-field [closed-ms (current-inexact-milliseconds)])
-    (inherit-field app stream)
-    (super-new)
-
-    (define/override (get-work-evt)
-      (handle-evt (alarm-evt (+ closed-ms KEEP-AFTER-CLOSE-MS))
+    (define/public (get-closed-work-evt)
+      (handle-evt (guard-evt
+                   (lambda ()
+                     (if closed-ms (alarm-evt (+ closed-ms KEEP-AFTER-CLOSE-MS)) never-evt)))
                   (lambda (ignore)
                     (log-http2-debug "~a removing stream closed after delay"
                                      (send stream get-ID))
                     (send stream remove-stream))))
+
+    ;; ------------------------------------------------------------
+    ;; Errors
+
+    (define/public (get-info-for-exn)
+      (hasheq 'version 'http/2
+              'streamid (and stream (send stream get-streamid))))
+
+    (define/public (build/send-exn-to-user/done msg kvs #:wrapped-exn [wrapped-exn #f])
+      (let* ([info (get-info-for-exn)]
+             [info (if wrapped-exn (hash-set info 'wrapped-exn wrapped-exn) info)]
+             [info (apply hash-set* info kvs)])
+        (send-exn-to-user (build-exn msg info))
+        (set-recv-state! 'done/ignore)))
+
+    (define/public (by-peer) "by peer")
+    (define/public (peer- sym)
+      (case sym
+        [else (string->symbol (format "peer-~a" sym))]))
     ))
