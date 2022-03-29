@@ -40,6 +40,8 @@
             (when (and data (memq 'forbid-request-body (hash-ref known-methods method)))
               (h-error "data forbidden for given method\n  method: ~e\n  data: ~e" method data
                        #:info (hasheq 'code 'request-method-forbids-data)))
+            (when (eq? method 'CONNECT)
+              (set! data (check-connect-target 'request data)))
             (values method u hs data))
   #:transparent
   #:property prop:about
@@ -87,13 +89,13 @@
           (DELETE  . (idmp undef-request-body))
           (OPTIONS . (safe))
           (TRACE   . (safe forbid-request-body))
-          (CONNECT . (disallow undef-request-body))
+          (CONNECT . (#|special handling of request-body|#))
 
           (PATCH   . ()) ;; RFC 5789
           ))
 
 (define known-method-names
-  '(GET HEAD POST PUT DELETE OPTIONS TRACE PATCH))
+  '(GET HEAD POST PUT DELETE OPTIONS TRACE CONNECT PATCH))
 
 ;; ----------------------------------------
 
