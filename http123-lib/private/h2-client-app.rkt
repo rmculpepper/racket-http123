@@ -38,6 +38,11 @@
     (field [received 'unknown])
     (define/public (set-received! v) (set! received v))
 
+    (define/private (request-type)
+      (case (request-method req)
+        [(CONNECT) 'connect]
+        [else 'normal]))
+
     ;; ----------------------------------------
     ;; Errors
 
@@ -56,7 +61,9 @@
     ;; ----------------------------------------
 
     (define/public (get-user-communication)
-      (values (make-pump-data-out) resp-bxe))
+      (case (request-type)
+        [(normal) (values (make-pump-data-out) resp-bxe)]
+        [(connect) (values void resp-bxe)]))
 
     (define/private ((make-pump-data-out))
       ;; run in user thread:
@@ -140,6 +147,10 @@
               (status-code status)
               (header header)
               (content user-in)
+              (data-out (case (request-type)
+                          [(normal) #f]
+                          ;; FIXME: wrap port to propagate exns, block based on flow control??
+                          [(connect) user-out]))
               (trailerbxe trailerbxe))))
       (lambda () (force resp-promise)))
 
@@ -163,7 +174,7 @@
       (define enc-header (encode-header (append pseudo-header header)
                                         (let ([conn (send stream get-conn)])
                                           (send conn get-sending-dt))))
-      (define no-content? (or (eq? data #f) (equal? data #"")))
+      (define no-content? (and (eq? (request-type) 'normal) (or (eq? data #f) (equal? data #""))))
       (when no-content? (close-input-port in-from-user))
       (send stream queue-frames (make-header-frames enc-header no-content?)))
 
