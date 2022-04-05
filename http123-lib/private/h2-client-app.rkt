@@ -170,11 +170,15 @@
     (define/private (send-request req)
       (match-define (request method url header data) req)
       (log-http2-debug "~a initiating ~s request" (send stream get-ID) method)
-      (define pseudo-header (make-pseudo-header method url))
+      (define req-type (request-type))
+      (define pseudo-header
+        (case req-type
+          [(normal) (make-pseudo-header method url)]
+          [(connect) (make-connect-pseudo-header method data)]))
       (define enc-header (encode-header (append pseudo-header header)
                                         (let ([conn (send stream get-conn)])
                                           (send conn get-sending-dt))))
-      (define no-content? (and (eq? (request-type) 'normal) (or (eq? data #f) (equal? data #""))))
+      (define no-content? (and (eq? req-type 'normal) (or (eq? data #f) (equal? data #""))))
       (when no-content? (close-input-port in-from-user))
       (send stream queue-frames (make-header-frames enc-header no-content?)))
 
@@ -206,6 +210,11 @@
         (list #":scheme" (string->bytes/utf-8 (url-scheme u)))
         (list #":path" (let ([path (url-path/no-fragment->bytes u)])
                          (if (equal? path #"") #"/" path)))))
+
+(define (make-connect-pseudo-header method data)
+  (list (list #":method" (symbol->bytes method))
+        (list #":authority" data)
+        #| 8.3: MUST omit :scheme and :path; see also request.rkt |#))
 
 (define (make-header-frames* enc-header no-content? streamid frame-size)
   (define len (bytes-length enc-header))
