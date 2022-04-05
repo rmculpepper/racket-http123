@@ -38,6 +38,8 @@
      (->*m [] [boolean?] (or/c #f input-port?))]
     [close-content-in
      (->m void?)]
+    [get-data-out
+     (->m (or/c #f output-port?))]
     [get-trailer
      (->m (or/c #f (is-a?/c header<%>)))]
     [get-trailer-evt
@@ -59,6 +61,7 @@
                 header          ;; header%
                 trailerbxe)     ;; (Evt (-> (or/c #f header%)))
     (init ((init-content content))) ;; #f or Bytes or InputPort
+    (init-field [data-out #f])  ;; #f or OutputPort
     (field [info #hasheq()])    ;; Hasheq[Any => Any]
     (super-new)
 
@@ -81,6 +84,7 @@
       (send header get-content-type))
     (define/public (close-content-in)
       (when content-in (close-input-port content-in)))
+    (define/public (get-data-out) data-out)
 
     (abstract get-version)
 
