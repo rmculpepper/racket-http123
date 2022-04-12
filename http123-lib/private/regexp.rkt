@@ -66,10 +66,3 @@
          (define re-lit (byte-pregexp re-string (bad-regexp-error this-syntax #'re)))
          #`(quote #,re-lit)]))
     (values (tx #"" #"") (tx #"^" #"") (tx #"^" #"$"))))
-
-(define-rx OWS "[ \t]*")
-(define-rx TCHAR "[-^!#$&'*+._`|~a-zA-Z0-9]")
-(define-rx TOKEN (+ TCHAR))
-
-(define-rx lower-TCHAR "[-^!#$&'*+._`|~a-z0-9]")
-(define-rx lower-TOKEN (+ lower-TCHAR))
