@@ -6,10 +6,11 @@
          racket/contract/base
          racket/match
          scramble/class
+         scramble/regexp
          "interfaces.rkt"
-         "regexp.rkt"
          "header-base.rkt"
-         (submod "util.rkt" ascii))
+         (submod "util.rkt" ascii)
+         (submod "util.rkt" regexp))
 (provide (all-defined-out)
          (all-from-out "header-base.rkt"))
 
@@ -29,7 +30,7 @@
 ;; - field-value - right-hand side
 
 (define (header-field-key? v)
-  (and (bytes? v) (regexp-match-exact? (rx lower-TOKEN) v)))
+  (and (bytes? v) (regexp-match-exact? lower-TOKEN v)))
 
 (define header<%>
   (interface ()
@@ -131,7 +132,7 @@
 
     (define/public (get-content-type)
       (define content-type (or (get-value #"content-type") #""))
-      (match (regexp-match (rx (rx ^ (record TOKEN) "/" (record TOKEN))) content-type)
+      (match (regexp-match (px #:byte ^ (report TOKEN) "/" (report TOKEN)) content-type)
         [(list _ type-bs subtype-bs)
          (string->symbol (format "~a/~a" type-bs subtype-bs))]
         [_ #f]))
@@ -156,7 +157,7 @@
   (make-header-from-list
    raw-header
    (lambda (line)
-     (match (regexp-match (rx^$ HEADER-FIELD) line)
+     (match (regexp-match (byte-px^$ HEADER-FIELD) line)
        [(list _ key-bs val-bs)
         (list (check-header-field-key key-bs)
               (check-header-field-value val-bs))]
@@ -180,7 +181,7 @@
              #:info (hasheq 'code 'malformed-header-field)))
   (match entry
     [(list* (? bytes? key) (? bytes? value) (or '() '(never-add)))
-     (unless (regexp-match? (rx^$ lower-TOKEN) key)
+     (unless (regexp-match? (byte-px^$ lower-TOKEN) key)
        ;; 8.1.2: keys must be lowercase
        (bad))
      (list (check-header-field-key key)

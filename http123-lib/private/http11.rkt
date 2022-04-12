@@ -7,9 +7,9 @@
          racket/promise
          binaryio/reader
          scramble/evt
+         scramble/regexp
          "interfaces.rkt"
          "header.rkt"
-         "regexp.rkt"
          (submod "util.rkt" port)
          (submod "util.rkt" url)
          "request.rkt"
@@ -22,9 +22,10 @@
 (define STATUS-EOL-MODE 'return-linefeed)
 (define HEADER-EOL-MODE 'return-linefeed)
 
-(define-rx STATUS-CODE #px#"[0-9]{3}") ;; FIXME: or [1-5][0-9]{2} ??
-(define-rx STATUS-LINE
-  (rx ^ (record "HTTP/[0-9.]+") " " (record STATUS-CODE) " " (record ".*") $))
+(define-RE STATUS-CODE #:byte (repeat (chars digit) 3)) ;; FIXME: or [1-5][0-9]{2} ??
+(define-RE STATUS-LINE #:byte
+  (cat ^ (report (cat "HTTP/" (+ (chars digit ".")))) " " (report STATUS-CODE) " "
+       (report (inject ".*")) $))
 
 ;; A Sending is (sending Request BoxEvt[Response])
 (struct sending (req resp-bxe))
@@ -319,7 +320,7 @@
     (define/private (read-status-line)
       (define line (b-read-bytes-line br STATUS-EOL-MODE))
       (log-http1-debug "got status line: ~e" line)
-      (match (regexp-match (rx STATUS-LINE) line)
+      (match (regexp-match STATUS-LINE line)
         [(list _ http-version status-code reason-phrase)
          (values line http-version status-code)]
         [#f (h1-error "expected status line from server\n  got: ~e" line

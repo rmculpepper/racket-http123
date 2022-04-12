@@ -4,6 +4,19 @@
 #lang racket/base
 
 ;; ============================================================
+;; Regexp
+
+(module regexp racket/base
+  (require scramble/regexp)
+  (provide (all-defined-out))
+  (define-syntax-rule (byte-px^$ part ...) (px #:byte ^ part ... $))
+  (define-RE OWS #:byte (* (chars #\space #\tab)))
+  (define-RE TCHAR #:byte (chars alpha digit "!#$&'*+-.^_`|~"))
+  (define-RE TOKEN #:byte (+ TCHAR))
+  (define-RE lower-TCHAR #:byte (chars (intersect TCHAR (complement upper))))
+  (define-RE lower-TOKEN #:byte (+ lower-TCHAR)))
+
+;; ============================================================
 ;; ASCII
 
 (module ascii racket/base
@@ -41,21 +54,47 @@
            net/uri-codec
            net/url-structs
            net/url-string
-           "regexp.rkt"
+           scramble/regexp
+           (only-in (submod ".." regexp) byte-px^$)
            (submod ".." ascii))
   (provide (all-defined-out))
 
   ;; Approximations
-  (define-rx ip4-rx "[0-9]{1,3}(?:[.][0-9]{3})")
-  (define-rx ip6-rx "\\[[0-9a-fA-F:]*:[0-9a-fA-F:]*\\]")
+  (define-RE ip4-rx #:byte (cat (repeat (chars digit) 1 3) "." (repeat (chars digit) 3)))
 
-  (define-rx unreserved-rx "[-a-zA-z0-9._~]")
-  (define-rx pct-encoded-rx "%[0-9a-zA-Z]{2}")
-  (define-rx sub-delims-rx "[!$&'()*+,;=]")
-  (define-rx reg-name-rx (* (or unreserved-rx pct-encoded-rx sub-delims-rx)))
+  (define-RE h16 #:byte (repeat (chars xdigit) 1 4))
+  (define-RE h16: #:byte (cat h16 ":"))
+  (define-RE ls32 #:byte (or (cat h16 ":" h16) ip4-rx))
 
-  (define-rx host-rx (or ip4-rx ip6-rx reg-name-rx))
-  (define-rx host+port-rx (rx (record host-rx) ":" (record "[0-9]+")))
+  ;; IPv6address   =                     6( h16: ) ls32
+  ;;               /                "::" 5( h16: ) ls32
+  ;;               / [   1( h16: ) ] ":" 4( h16: ) ls32
+  ;;               / [ 1*2( h16: ) ] ":" 3( h16: ) ls32
+  ;;               / [ 1*3( h16: ) ] ":" 2( h16: ) ls32
+  ;;               / [ 1*4( h16: ) ] ":"    h16:   ls32
+  ;;               / [ 1*5( h16: ) ] ":"           ls32
+  ;;               / [ 1*6( h16: ) ] ":"           h16
+  ;;               / [ 1*7( h16: ) ] ":"
+  (define-RE ip6-exact-rx #:byte
+    (or (cat                       (repeat h16: 6) ls32)
+        (cat                  "::" (repeat h16: 5) ls32)
+        (cat (repeat h16: 1)   ":" (repeat h16: 4) ls32)
+        (cat (repeat h16: 1 2) ":" (repeat h16: 3) ls32)
+        (cat (repeat h16: 1 3) ":" (repeat h16: 2) ls32)
+        (cat (repeat h16: 1 4) ":" (repeat h16: 1) ls32)
+        (cat (repeat h16: 1 5) ":"                 ls32)
+        (cat (repeat h16: 1 6) ":" h16)
+        (cat (repeat h16: 1 7) ":")))
+  (define-RE ip6-approx-rx #:byte (cat (? ":") (repeat h16: 0 7) (or ls32 h16 ":")))
+  (define-RE ip6-rx #:byte (cat "[" ip6-exact-rx "]"))
+
+  (define-RE unreserved-rx #:byte (chars alpha digit "-._~"))
+  (define-RE pct-encoded-rx #:byte (cat "%" (repeat (chars xdigit) 2)))
+  (define-RE sub-delims-rx #:byte (chars "!$&'()*+,;="))
+  (define-RE reg-name-rx #:byte (* (or unreserved-rx pct-encoded-rx sub-delims-rx)))
+
+  (define-RE host-rx #:byte (or ip4-rx ip6-rx reg-name-rx))
+  (define-RE host+port-rx #:byte (cat (report host-rx) ":" (report (+ (chars digit)))))
 
   (define (check-connect-target who loc)
     (define (bad msg loc)
@@ -73,7 +112,7 @@
 
   ;; parse-connect-target : Bytes -> (list Bytes Nat) or #f
   (define (parse-connect-target loc)
-    (match (regexp-match (rx^$ host+port-rx) loc)
+    (match (regexp-match (byte-px^$ host+port-rx) loc)
       [(list _ host port-bs)
        (list host (string->number (bytes->string/latin-1 port-bs)))]
       [else #f]))

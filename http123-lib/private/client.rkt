@@ -7,8 +7,8 @@
          racket/match
          net/url-structs
          net/cookies/user-agent
+         scramble/regexp
          "interfaces.rkt"
-         "regexp.rkt"
          "header-base.rkt"
          "header.rkt"
          "request.rkt"
@@ -255,9 +255,10 @@
      (if (member k ks) entry (assoc* ks alist))]))
 
 (define (type-wildcard type)
-  (cond [(regexp-match (rx^ (rx (record TOKEN) "/")) (symbol->string type))
-         => (lambda (m) (string->symbol (string-downcase (format "~a/*" (cadr m)))))]
-        [else #f]))
+  (match (symbol->string type)
+    [(regexp (px #:byte ^ (report TOKEN) "/") (list _ prefix))
+     (string->symbol (string-downcase (format "~a/*" prefix)))]
+    [_ #f]))
 
 ;; ----------------------------------------
 

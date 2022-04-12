@@ -7,7 +7,8 @@
          racket/list
          racket/symbol
          "interfaces.rkt"
-         "regexp.rkt")
+         scramble/regexp
+         (submod "util.rkt" regexp))
 (provide (all-defined-out))
 
 ;; References:
@@ -21,18 +22,19 @@
 
 (provide OWS TCHAR TOKEN)
 
-(define-rx FIELD-VCHAR "[\x21-\x7E]")
-(define-rx FIELD-CONTENT (rx FIELD-VCHAR (? (+ "[ \t]" FIELD-VCHAR))))
-(define-rx FIELD-VALUE (* FIELD-CONTENT))
+(define-RE FIELD-VCHAR #:byte (chars [#x21 #x7E]))
+;;(define-RE FIELD-CONTENT #:byte (cat FIELD-VCHAR (? (cat (+ (chars " \t")) FIELD-VCHAR))))
+;;(define-RE FIELD-VALUE #:byte (* FIELD-CONTENT))
+(define-RE FIELD-VALUE #:byte (or "" (cat FIELD-VCHAR (* (cat (* (chars " \t")) FIELD-VCHAR)))))
 
-(define-rx HEADER-START (rx (record TOKEN) ":"))
-(define-rx HEADER-FIELD (rx HEADER-START OWS (record FIELD-VALUE) OWS))
+(define-RE HEADER-START #:byte (cat (report TOKEN) ":"))
+(define-RE HEADER-FIELD #:byte (cat HEADER-START OWS (report FIELD-VALUE) OWS))
 
-(define-rx TOKEN+ (rx TOKEN (* OWS "," OWS TOKEN)))
+(define-RE TOKEN+ #:byte (cat TOKEN (* (cat OWS "," OWS TOKEN))))
 
-(define-rx qdtext #px#"[ \t\x21\x23-\\\x5B\\\x5D-\x7E]")
-(define-rx quoted-pair #px#"\\\\[ \t\x21-\x7E]")
-(define-rx quoted-string (rx "\"" (* (or qdtext quoted-pair)) "\""))
+(define-RE qdtext #:byte (chars #\space #\tab #x21 [#x23 #x5B] [#x5D #x7E]))
+(define-RE quoted-pair #:byte (cat "\\" (chars #\space #\tab [#x21 #x7E])))
+(define-RE quoted-string #:byte (cat "\"" (* (or qdtext quoted-pair)) "\""))
 
 
 ;; ============================================================
@@ -55,9 +57,9 @@
 ;; HeaderFieldValue = ImmutableBytes            -- matching FIELD-VALUE
 
 (define (header-field-key/c v)
-  (and (bytes? v) (immutable? v) (regexp-match-exact? (rx lower-TOKEN) v)))
+  (and (bytes? v) (immutable? v) (regexp-match-exact? lower-TOKEN v)))
 (define (header-field-value/c v)
-  (and (bytes? v) (immutable? v) (regexp-match-exact? (rx FIELD-VALUE) v)))
+  (and (bytes? v) (immutable? v) (regexp-match-exact? FIELD-VALUE v)))
 (define header-field/c (list/c header-field-key/c header-field-value/c))
 
 ;; check-header-field-list : InHeaderFieldList -> HeaderFieldList
@@ -72,12 +74,12 @@
     [(list key value)
      (list (check-header-field-key key) (check-header-field-value value))]
     [(? bytes?)
-     (match (regexp-match (rx^$ HEADER-FIELD) hf)
+     (match (regexp-match (byte-px^$ HEADER-FIELD) hf)
        [(list _ key val)
         (list (check-header-field-key key) (bytes->immutable-bytes val))]
        [_ (bad)])]
     [(? string?)
-     (match (regexp-match (rx^$ HEADER-FIELD) (string->bytes/utf-8 hf))
+     (match (regexp-match (byte-px^$ HEADER-FIELD) (string->bytes/utf-8 hf))
        [(list _ key val)
         (list (check-header-field-key key) (bytes->immutable-bytes val))]
        [_ (bad)])]
@@ -91,19 +93,19 @@
   (let loop ([key key0])
     (match key
       [(? symbol?) (loop (symbol->string key))]
-      [(? bytes? (regexp (rx^$ lower-TOKEN))) (imm key)]
-      [(? string? (regexp (rx^$ lower-TOKEN))) (imm (string->bytes/latin-1 key))]
-      [(? bytes? (regexp (rx^$ TOKEN))) (loop (bytes->string/latin-1 key))]
-      [(? string? (regexp (rx^$ TOKEN))) (loop (string-downcase key))]
+      [(? bytes? (regexp (byte-px^$ lower-TOKEN))) (imm key)]
+      [(? string? (regexp (byte-px^$ lower-TOKEN))) (imm (string->bytes/latin-1 key))]
+      [(? bytes? (regexp (byte-px^$ TOKEN))) (loop (bytes->string/latin-1 key))]
+      [(? string? (regexp (byte-px^$ TOKEN))) (loop (string-downcase key))]
       [else (h-error "bad header field key\n  key: ~e" key0
                      #:info (hasheq 'code 'bad-header-field-key))])))
 
 ;; check-header-field-value : InHeaderFieldValue -> HeaderFieldValue
 (define (check-header-field-value value)
   (match value
-    [(? bytes? (regexp (rx^$ (rx OWS (record FIELD-VALUE) OWS)) (list _ field-value)))
+    [(? bytes? (regexp (byte-px^$ OWS (report FIELD-VALUE) OWS) (list _ field-value)))
      (bytes->immutable-bytes field-value)]
-    [(? string? (regexp (rx^$ (rx OWS (record FIELD-VALUE) OWS)) (list _ field-value)))
+    [(? string? (regexp (byte-px^$ OWS (report FIELD-VALUE) OWS) (list _ field-value)))
      (bytes->immutable-bytes field-value)]
     [_ (h-error "bad header field value\n  value: ~e" value
                 #:info (hasheq 'code 'bad-header-field-value))]))
@@ -162,10 +164,10 @@
                          #:info (hasheq 'who 'header-key->bytes))])))
 
 (define (header-key-name? s)
-  (regexp-match? (rx^$ lower-TOKEN) s))
+  (regexp-match? (byte-px^$ lower-TOKEN) s))
 
 (define (header-key-name-ci? s)
-  (regexp-match (rx^$ TOKEN) s))
+  (regexp-match (byte-px^$ TOKEN) s))
 
 (define (pseudo-header-key-name? bs)
   (regexp-match? #rx#"^:(?:authority|method|path|scheme|status)$" bs))
