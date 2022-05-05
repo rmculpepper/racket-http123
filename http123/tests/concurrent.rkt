@@ -10,6 +10,10 @@
 (define DELAY 300) ;; ms
 (define ITERS 100) ;; see web-server.rkt
 
+(unless have-http2?
+  (printf "Could not start http/2 server. Skipping test.\n")
+  (exit 0))
+
 (printf "Expected test time is slightly over ~s s\n"
         (quotient (* DELAY ITERS) 1000))
 
