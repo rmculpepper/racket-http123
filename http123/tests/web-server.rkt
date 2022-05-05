@@ -129,7 +129,7 @@
     (parameterize ((current-custodian server-cust)
                    (current-subprocess-custodian-mode 'interrupt)
                    ;; Discard nghttpx logging
-                   #;(current-error-port (open-output-nowhere)))
+                   (current-error-port (open-output-nowhere)))
       (void
        (thread
         (lambda ()
