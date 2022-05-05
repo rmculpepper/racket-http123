@@ -10,6 +10,9 @@
 (define DELAY 300) ;; ms
 (define ITERS 100) ;; see web-server.rkt
 
+(printf "Expected test time is slightly over ~s s\n"
+        (quotient (* DELAY ITERS) 1000))
+
 (define req-url (format "https://localhost:17190/slow/~a" DELAY))
 
 (define NTHREADS 20)
