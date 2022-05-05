@@ -3,6 +3,7 @@
 
 #lang racket/base
 (require racket/runtime-path
+         racket/tcp
          web-server/servlet
          web-server/servlet-env
          json)
@@ -89,6 +90,20 @@
                  #:extra-files-paths (list (path->string static-dir))
                  #:log-file (if log? "/dev/stdout" #f)))
 
+(define (wait-for-port port)
+  (define WAIT-MS 1000.0)
+  (define SLEEP-S 0.1)
+  (define stop (+ WAIT-MS (current-inexact-milliseconds)))
+  (let loop ()
+    (define port-ready?
+      (with-handlers ([exn:fail? (lambda (e) #f)])
+        (define-values (in out) (tcp-connect "localhost" port))
+        (begin (close-input-port in) (close-output-port out) #t)))
+    (unless port-ready?
+      (cond [(< (current-inexact-milliseconds) stop)
+             (begin (sleep SLEEP-S) (loop))]
+            [else (error 'wait-for-port "port ~s not ready after ~s ms" port WAIT-MS)]))))
+
 ;; ----------------------------------------
 
 (module+ start-server
@@ -104,6 +119,7 @@
   ;; Start the Racket web server
   (parameterize ((current-custodian server-cust))
     (void (thread start)))
+  (wait-for-port 17180)
 
   ;; Start the nghttpx reverse proxy, if available.
   (define nghttpx (find-executable-path "nghttpx"))
@@ -121,12 +137,9 @@
                    "-b" "localhost,17180"
                    "-f" "*,17190"
                    "--no-ocsp"
-                   key-pem cert-pem))))))
-
-  (define have-http2? (and nghttpx #t))
-
-  ;; Give the servers time to start up...
-  (sleep 0.2))
+                   key-pem cert-pem)))))
+    (wait-for-port 17190))
+  (define have-http2? (and nghttpx #t)))
 
 (module+ main
   (require (submod ".." start-server))
