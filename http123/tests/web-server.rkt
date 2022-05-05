@@ -91,12 +91,12 @@
                  #:log-file (if log? "/dev/stdout" #f)))
 
 (define (wait-for-port port)
-  (define WAIT-MS 1000.0)
+  (define WAIT-MS 10000.0)
   (define SLEEP-S 0.1)
   (define stop (+ WAIT-MS (current-inexact-milliseconds)))
   (let loop ()
     (define port-ready?
-      (with-handlers ([exn:fail? (lambda (e) #f)])
+      (with-handlers ([exn:fail:network? (lambda (e) #f)])
         (define-values (in out) (tcp-connect "localhost" port))
         (begin (close-input-port in) (close-output-port out) #t)))
     (unless port-ready?
@@ -129,7 +129,7 @@
     (parameterize ((current-custodian server-cust)
                    (current-subprocess-custodian-mode 'interrupt)
                    ;; Discard nghttpx logging
-                   (current-error-port (open-output-nowhere)))
+                   #;(current-error-port (open-output-nowhere)))
       (void
        (thread
         (lambda ()
