@@ -17,11 +17,6 @@ jobs:
           distribution: full
           variant: ${{ matrix.racket-variant }}
           version: ${{ matrix.racket-version }}
-      - name: Install dependencies
-        run: |
-          sudo wget -o nghttp2-proxy.deb \
-            https://launchpad.net/ubuntu/+archive/primary/+files/nghttp2-proxy_1.43.0-1_amd64.deb && \
-            sudo dpkg -i nghttp2-proxy.deb
       - name: Install the package
         run: raco pkg install --auto http123-lib/ http123/
       - name: Run the tests
