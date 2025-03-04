@@ -27,7 +27,7 @@
 
 ;; HeaderEntry = (list Bytes Bytes) | (list Bytes Bytes 'never-add)
 
-;; encode-header : (Listof HeaderEntry) State -> Void
+;; encode-header : (Listof HeaderEntry) State -> Bytes
 (define (encode-header hfields dt #:who [who 'encode-header]
                        #:huffman? [huffman? #t]
                        #:overrides [overrides #hash()])
