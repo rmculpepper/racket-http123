@@ -41,8 +41,42 @@
            net/uri-codec
            net/url-structs
            net/url-string
+           "regexp.rkt"
            (submod ".." ascii))
   (provide (all-defined-out))
+
+  ;; Approximations
+  (define-rx ip4-rx "[0-9]{1,3}(?:[.][0-9]{3})")
+  (define-rx ip6-rx "\\[[0-9a-fA-F:]*:[0-9a-fA-F:]*\\]")
+
+  (define-rx unreserved-rx "[-a-zA-z0-9._~]")
+  (define-rx pct-encoded-rx "%[0-9a-zA-Z]{2}")
+  (define-rx sub-delims-rx "[!$&'()*+,;=]")
+  (define-rx reg-name-rx (* (or unreserved-rx pct-encoded-rx sub-delims-rx)))
+
+  (define-rx host-rx (or ip4-rx ip6-rx reg-name-rx))
+  (define-rx host+port-rx (rx (record host-rx) ":" (record "[0-9]+")))
+
+  (define (check-connect-target who loc)
+    (define (bad msg loc)
+      (error who "bad CONNECT target, ~a\n  target: ~e" msg loc))
+    (define (bad-expect loc)
+      (bad "expected byte string containing host:port" loc))
+    (define loc-bytes
+      (cond [(bytes? loc) (bytes->immutable-bytes loc)]
+            [else (bad-expect loc)]))
+    (match (parse-connect-target loc-bytes)
+      [(list host port)
+       (unless (< 0 port (expt 2 16)) (bad "port number out of range" loc-bytes))
+       loc-bytes]
+      [_ (bad-expect loc-bytes)]))
+
+  ;; parse-connect-target : Bytes -> (list Bytes Nat) or #f
+  (define (parse-connect-target loc)
+    (match (regexp-match (rx^$ host+port-rx) loc)
+      [(list _ host port-bs)
+       (list host (string->number (bytes->string/latin-1 port-bs)))]
+      [else #f]))
 
   (define (check-http-url who loc [orig loc])
     (match loc
