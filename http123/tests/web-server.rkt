@@ -83,6 +83,7 @@
 
 (define (start [log? #f])
   (serve/servlet dispatch
+                 #:listen-ip #f
                  #:port 17180
                  #:servlet-regexp #rx""
                  #:command-line? #t
@@ -129,11 +130,12 @@
     (parameterize ((current-custodian server-cust)
                    (current-subprocess-custodian-mode 'interrupt)
                    ;; Discard nghttpx logging
-                   (current-error-port (open-output-nowhere)))
+                   #;(current-error-port (open-output-nowhere)))
       (void
        (thread
         (lambda ()
           (system* nghttpx
+                   "--conf=/dev/null"
                    "-b" "localhost,17180"
                    "-f" "*,17190"
                    "--no-ocsp"

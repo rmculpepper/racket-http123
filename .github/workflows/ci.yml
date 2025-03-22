@@ -19,8 +19,9 @@ jobs:
           version: ${{ matrix.racket-version }}
       - name: Install dependencies
         run: |
-          sudo apt-get install -y nghttp2-proxy && \
-          sudo systemctl stop nghttpx.service
+          sudo apt-get install -y nghttp2-proxy ; \
+          sudo service nghttpx stop ; \
+          sudo service --status-all
       - name: Install the package
         run: raco pkg install --batch --auto http123-lib/ http123/
       - name: Run the tests
