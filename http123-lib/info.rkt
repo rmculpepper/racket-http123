@@ -10,7 +10,7 @@
 (define deps
   '("base"
     "binaryio-lib"
-    "scramble-lib"
+    ["scramble-lib" #:version "0.5"]
     "net-cookies-lib"))
 (define build-deps
   '("rackunit-lib"))
