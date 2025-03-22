@@ -83,6 +83,7 @@
 
 (define (start [log? #f])
   (serve/servlet dispatch
+                 #:listen-ip #f
                  #:port 17180
                  #:servlet-regexp #rx""
                  #:command-line? #t
