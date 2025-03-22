@@ -11,13 +11,17 @@ jobs:
         racket-variant: ["BC", "CS"]
     steps:
       - uses: actions/checkout@master
-      - uses: Bogdanp/setup-racket@v1.7
+      - uses: Bogdanp/setup-racket@v1.11
         with:
           architecture: x64
           distribution: full
           variant: ${{ matrix.racket-variant }}
           version: ${{ matrix.racket-version }}
+      - name: Install dependencies
+        run: |
+          sudo apt-get install -y nghttp2-proxy && \
+          sudo systemctl stop nghttpx.service
       - name: Install the package
-        run: raco pkg install --auto http123-lib/ http123/
+        run: raco pkg install --batch --auto http123-lib/ http123/
       - name: Run the tests
         run: raco test -c http123
