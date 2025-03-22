@@ -136,8 +136,6 @@
         (lambda ()
           (system* nghttpx
                    "--conf=/dev/null"
-                   "--log-level=INFO"
-                   "--errorlog-file=/dev/stderr"
                    "-b" "localhost,17180"
                    "-f" "*,17190"
                    "--no-ocsp"

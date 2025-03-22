@@ -26,10 +26,6 @@
                `([x-racket-always "always"])
                #:add-response-handlers
                `([404 ,(lambda (client resp) 'error)]
-                 [502 ,(lambda (client resp)
-                         (define content (port->string (send resp get-content-in)))
-                         (eprintf "*** 502\n~a\n\n" content)
-                         'error-502)]
                  [redirection ,(lambda (client resp) (send client handle-redirection resp))])
                #:add-content-handlers
                `([application/json ,read-json]
